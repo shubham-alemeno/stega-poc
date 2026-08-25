@@ -36,6 +36,22 @@ export default function Home() {
           </p>
         </Link>
       </div>
+
+      <div className="mt-12">
+        <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide mb-3">Liquor POC</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Link
+            href="/liquor/encode"
+            className="group border border-neutral-800 rounded-lg p-6 hover:border-red-600 transition-colors"
+          >
+            <h3 className="text-lg font-semibold text-neutral-50 group-hover:text-red-400">Encode</h3>
+            <p className="text-sm text-neutral-500 mt-2 leading-relaxed">
+              Plain 1024-bit DCT embedding — no BCH, no error correction. Strength, seed, and a single
+              coefficient pair; outputs the encoded image plus the raw bit string for authentication.
+            </p>
+          </Link>
+        </div>
+      </div>
     </main>
   );
 }
