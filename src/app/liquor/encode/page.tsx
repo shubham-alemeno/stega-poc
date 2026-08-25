@@ -25,17 +25,13 @@ export default function LiquorEncodePage() {
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [downloadName, setDownloadName] = useState('liquor-encoded.png');
   const [bitString, setBitString] = useState<string | null>(null);
+  const [uploadedImage, setUploadedImage] = useState<RgbaImage | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  async function handleFile(file: File) {
+  function runEncode(rgba: RgbaImage) {
     setError(null);
-    setDownloadUrl(null);
-    setBitString(null);
-    setFileName(file.name);
     setBusy(true);
     try {
-      const { img, width, height } = await loadImageFileNative(file);
-      const rgba = imageToRgbaNative(img, width, height);
       const result = encodeLiquorImage(rgba, { strength, seed, coeff1, coeff2 });
 
       const canvas = canvasRef.current!;
@@ -46,6 +42,22 @@ export default function LiquorEncodePage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleFile(file: File) {
+    setDownloadUrl(null);
+    setBitString(null);
+    setFileName(file.name);
+    setBusy(true);
+    try {
+      const { img, width, height } = await loadImageFileNative(file);
+      const rgba = imageToRgbaNative(img, width, height);
+      setUploadedImage(rgba);
+      runEncode(rgba);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
   }
@@ -178,6 +190,16 @@ export default function LiquorEncodePage() {
               />
               {fileName && <p className="text-xs text-neutral-500 mt-1">{fileName}</p>}
             </div>
+
+            {uploadedImage && (
+              <button
+                onClick={() => runEncode(uploadedImage)}
+                disabled={busy}
+                className="w-full px-4 py-2.5 rounded border border-red-700 text-red-400 font-medium hover:bg-red-950/40 transition-colors disabled:opacity-50"
+              >
+                Re-encode with current settings
+              </button>
+            )}
 
             {busy && <p className="text-sm text-neutral-400 animate-pulse">Encoding…</p>}
             {error && <p className="text-sm text-red-500 font-medium">{error}</p>}
