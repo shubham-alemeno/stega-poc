@@ -274,45 +274,126 @@ function mmToPixelsPerMeter(pixelCount: number, mmSize: number): number {
   return Math.round(pixelCount / (mmSize / 1000));
 }
 
-/** Renders a luma grid to a physically-sized PNG blob (grayscale visually,
- * encoded as RGBA since that's what canvas natively supports) at the given
- * pixel scale multiplier, with correct pHYs metadata for `mmSize`
- * (the physical size of the BASE/1x image — a 2x render keeps the same
- * physical mm size at double the pixel count and DPI, matching this
- * project's established 1x/2x convention). */
-export async function lumaToPhysicalPng(
+// ---------------------------------------------------------------------------
+// Minimal PNG encoder producing a true 8-bit GRAYSCALE PNG (color type 0).
+// Canvas.toBlob always produces an RGB/RGBA PNG regardless of content — even
+// if all three channels are equal the file header says color type 2 or 6,
+// and software like Photoshop correctly identifies it as a color image.
+// Building the PNG directly (IHDR with color type 0, one IDAT, IEND) gives
+// us a standard grayscale file that every tool recognizes correctly.
+// ---------------------------------------------------------------------------
+
+function adler32(data: Uint8Array): number {
+  let s1 = 1, s2 = 0;
+  for (let i = 0; i < data.length; i++) {
+    s1 = (s1 + data[i]) % 65521;
+    s2 = (s2 + s1) % 65521;
+  }
+  return ((s2 << 16) | s1) >>> 0;
+}
+
+/** Minimal DEFLATE store (no compression) — wraps raw bytes in a single
+ * non-compressed deflate block, then wraps that in a zlib envelope.
+ * Correct for any length ≤ 65535 bytes per block; we chunk larger images. */
+function zlibStore(data: Uint8Array): Uint8Array {
+  const MAX_BLOCK = 65535;
+  const blocks = Math.ceil(data.length / MAX_BLOCK) || 1;
+  // 2 (zlib header) + blocks*(5+MAX_BLOCK) + 4 (adler32) — generous upper bound
+  const out: number[] = [];
+
+  // zlib header: CMF=0x78 (deflate, window 32kb), FLG=0x01 (no dict, check bits)
+  out.push(0x78, 0x01);
+
+  for (let b = 0; b < blocks; b++) {
+    const start = b * MAX_BLOCK;
+    const end = Math.min(start + MAX_BLOCK, data.length);
+    const chunk = data.subarray(start, end);
+    const isLast = b === blocks - 1 ? 1 : 0;
+    const len = chunk.length;
+    const nlen = (~len) & 0xffff;
+    out.push(isLast, len & 0xff, (len >> 8) & 0xff, nlen & 0xff, (nlen >> 8) & 0xff);
+    for (let i = 0; i < chunk.length; i++) out.push(chunk[i]);
+  }
+
+  // adler32 checksum of the raw (uncompressed) input data
+  const a = adler32(data);
+  out.push((a >>> 24) & 0xff, (a >>> 16) & 0xff, (a >>> 8) & 0xff, a & 0xff);
+
+  return new Uint8Array(out);
+}
+
+function pngChunk(type: string, data: Uint8Array): Uint8Array {
+  const typeBytes = new Uint8Array(type.split('').map((c) => c.charCodeAt(0)));
+  const combined = new Uint8Array(4 + data.length);
+  combined.set(typeBytes);
+  combined.set(data, 4);
+  const checksum = crc32(combined);
+  const chunk = new Uint8Array(4 + 4 + data.length + 4);
+  chunk.set(u32be(data.length), 0);
+  chunk.set(combined, 4);
+  chunk.set(u32be(checksum), 4 + 4 + data.length);
+  return chunk;
+}
+
+function buildGrayscalePng(pixels: Uint8Array, width: number, height: number): Uint8Array {
+  // PNG signature
+  const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+
+  // IHDR: width, height, bit depth 8, color type 0 (grayscale), compression 0, filter 0, interlace 0
+  const ihdrData = new Uint8Array(13);
+  ihdrData.set(u32be(width), 0);
+  ihdrData.set(u32be(height), 4);
+  ihdrData[8] = 8;  // bit depth
+  ihdrData[9] = 0;  // color type 0 = grayscale
+  ihdrData[10] = 0; ihdrData[11] = 0; ihdrData[12] = 0;
+  const ihdr = pngChunk('IHDR', ihdrData);
+
+  // Filter byte 0x00 (None) prepended to each scanline — required by PNG spec
+  const scanlineLen = width;
+  const filtered = new Uint8Array(height * (1 + scanlineLen));
+  for (let row = 0; row < height; row++) {
+    filtered[row * (1 + scanlineLen)] = 0; // filter type: None
+    filtered.set(pixels.subarray(row * scanlineLen, (row + 1) * scanlineLen), row * (1 + scanlineLen) + 1);
+  }
+  const idat = pngChunk('IDAT', zlibStore(filtered));
+
+  const iend = pngChunk('IEND', new Uint8Array(0));
+
+  const totalLen = sig.length + ihdr.length + idat.length + iend.length;
+  const png = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const part of [sig, ihdr, idat, iend]) {
+    png.set(part, offset);
+    offset += part.length;
+  }
+  return png;
+}
+
+/** Renders a luma grid to a true 8-bit grayscale PNG blob (color type 0 —
+ * correctly identified as grayscale by Photoshop, GIMP, CorelDraw, etc.)
+ * at the given pixel scale multiplier, with correct pHYs metadata for
+ * `mmSize`. The 2x render keeps the same physical mm size at double the
+ * pixel resolution and DPI. */
+export function lumaToPhysicalPng(
   Y: Float64Array,
   nativeSize: number,
   scale: 1 | 2,
   mmSize: number
-): Promise<Blob> {
+): Blob {
   const outSize = nativeSize * scale;
-  const canvas = document.createElement('canvas');
-  canvas.width = outSize;
-  canvas.height = outSize;
-  const ctx = canvas.getContext('2d')!;
-  const imgData = ctx.createImageData(outSize, outSize);
 
+  // Build the scaled pixel array (8-bit, one byte per pixel)
+  const pixels = new Uint8Array(outSize * outSize);
   for (let y = 0; y < outSize; y++) {
     for (let x = 0; x < outSize; x++) {
       const srcX = Math.min(nativeSize - 1, Math.floor(x / scale));
       const srcY = Math.min(nativeSize - 1, Math.floor(y / scale));
-      const v = Math.round(Y[srcY * nativeSize + srcX]);
-      const di = (y * outSize + x) * 4;
-      imgData.data[di] = v;
-      imgData.data[di + 1] = v;
-      imgData.data[di + 2] = v;
-      imgData.data[di + 3] = 255;
+      pixels[y * outSize + x] = Math.min(255, Math.max(0, Math.round(Y[srcY * nativeSize + srcX])));
     }
   }
-  ctx.putImageData(imgData, 0, 0);
 
-  const blob: Blob = await new Promise((resolve, reject) => {
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('canvas.toBlob failed'))), 'image/png');
-  });
-
-  const pngBytes = new Uint8Array(await blob.arrayBuffer());
+  const pngBytes = buildGrayscalePng(pixels, outSize, outSize);
   const pixelsPerMeter = mmToPixelsPerMeter(outSize, mmSize);
   const patched = injectPhysChunk(pngBytes, pixelsPerMeter);
-  return new Blob([new Uint8Array(patched)], { type: 'image/png' });
+  return new Blob([patched.buffer as ArrayBuffer], { type: 'image/png' });
 }

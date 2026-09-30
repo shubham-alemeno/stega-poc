@@ -82,8 +82,8 @@ export default function QrWatermarkPocPage() {
       ctx.putImageData(imgData, 0, 0);
       setPreviewUrl(canvas.toDataURL('image/png'));
 
-      const blob1x = await lumaToPhysicalPng(result.watermarkedY, result.nativeSize, 1, mmSize);
-      const blob2x = await lumaToPhysicalPng(result.watermarkedY, result.nativeSize, 2, mmSize);
+      const blob1x = lumaToPhysicalPng(result.watermarkedY, result.nativeSize, 1, mmSize);
+      const blob2x = lumaToPhysicalPng(result.watermarkedY, result.nativeSize, 2, mmSize);
       setDownloadUrl1x(URL.createObjectURL(blob1x));
       setDownloadUrl2x(URL.createObjectURL(blob2x));
 
