@@ -96,16 +96,16 @@ export default function WatermarkBarcodePocPage() {
 
       {/* QR-specific */}
       {barcodeType === 'qr' && (
-        <div className="grid grid-cols-2 gap-4 p-4 border rounded bg-neutral-50">
+        <div className="grid grid-cols-2 gap-4 p-4 border rounded bg-neutral-900">
           <div>
             <label className="block text-sm font-medium mb-1">QR Version</label>
-            <select className="w-full border rounded px-3 py-2 bg-white" value={qrVersion} onChange={e => setQrVersion(Number(e.target.value) as QrVersion)}>
+            <select className="w-full border border-neutral-700 rounded px-3 py-2 bg-neutral-800 text-neutral-100" value={qrVersion} onChange={e => setQrVersion(Number(e.target.value) as QrVersion)}>
               {QR_VERSIONS.map(v => <option key={v} value={v}>Version {v} ({v*4+17}x{v*4+17})</option>)}
             </select>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Error Correction</label>
-            <select className="w-full border rounded px-3 py-2 bg-white" value={ecLevel} onChange={e => setEcLevel(e.target.value as EcLevel)}>
+            <select className="w-full border border-neutral-700 rounded px-3 py-2 bg-neutral-800 text-neutral-100" value={ecLevel} onChange={e => setEcLevel(e.target.value as EcLevel)}>
               {EC_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
             </select>
           </div>
@@ -114,10 +114,10 @@ export default function WatermarkBarcodePocPage() {
 
       {/* Data Matrix-specific */}
       {barcodeType === 'datamatrix' && (
-        <div className="grid grid-cols-2 gap-4 p-4 border rounded bg-neutral-50">
+        <div className="grid grid-cols-2 gap-4 p-4 border rounded bg-neutral-900">
           <div>
             <label className="block text-sm font-medium mb-1">Symbol size</label>
-            <select className="w-full border rounded px-3 py-2 bg-white" value={dmSize} onChange={e => setDmSize(e.target.value as DmSize)}>
+            <select className="w-full border border-neutral-700 rounded px-3 py-2 bg-neutral-800 text-neutral-100" value={dmSize} onChange={e => setDmSize(e.target.value as DmSize)}>
               {DM_SIZES.map(s => <option key={s} value={s}>{s === 'auto' ? 'Auto (smallest that fits)' : s}</option>)}
             </select>
           </div>
