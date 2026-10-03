@@ -5,7 +5,7 @@ import MultiCoeffSelector from '@/components/MultiCoeffSelector';
 import type { LayerSpec } from '@/lib/multiEncode';
 import {
   generateDataMatrixNative, embedWatermarkGridDM, computeGridGeometry,
-  lumaToPhysicalPng, DM_SIZES, MAX_TEXT_LENGTH, MIN_GRID_SIZE, MAX_GRID_SIZE,
+  lumaToPhysicalPng, DM_SIZES, DM_CAPACITY, MAX_TEXT_LENGTH, MIN_GRID_SIZE, MAX_GRID_SIZE,
   MIN_STRENGTH, MAX_STRENGTH, DEFAULT_SEED_STRING, DEFAULT_STRENGTH,
   DEFAULT_GRID_SIZE, DEFAULT_MM_SIZE, DEFAULT_DM_SCALE, type DmSize,
 } from '@/lib/dataMatrixWatermarkPoc';
@@ -66,8 +66,17 @@ export default function DataMatrixWatermarkPocPage() {
         <div>
           <label className="block text-sm font-medium mb-1">Symbol size</label>
           <select className="w-full border rounded px-3 py-2 bg-transparent" value={dmSize} onChange={e => setDmSize(e.target.value as DmSize)}>
-            {DM_SIZES.map(s => <option key={s} value={s}>{s === 'auto' ? 'Auto (smallest that fits)' : s}</option>)}
+            {DM_SIZES.map(s => {
+              const cap = DM_CAPACITY[s];
+              const label = s === 'auto' ? 'Auto (smallest that fits)' : `${s} — up to ${cap.alpha} alpha / ${cap.numeric} numeric`;
+              return <option key={s} value={s}>{label}</option>;
+            })}
           </select>
+          {dmSize !== 'auto' && DM_CAPACITY[dmSize] && (
+            <p className="text-xs text-neutral-400 mt-1">
+              Capacity: <span className="text-neutral-200">{DM_CAPACITY[dmSize].alpha} alphanumeric</span> or <span className="text-neutral-200">{DM_CAPACITY[dmSize].numeric} numeric</span> chars (ISO/IEC 16022)
+            </p>
+          )}
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Scale (px/module): {dmScale}</label>

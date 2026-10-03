@@ -41,6 +41,28 @@ export const DM_SIZES = [
 ] as const;
 export type DmSize = typeof DM_SIZES[number];
 
+/** Data capacity per symbol size — ISO/IEC 16022 Table 7.
+ * `numeric`: max numeric-only characters.
+ * `alpha`: max alphanumeric characters (letters, digits, punctuation). */
+export const DM_CAPACITY: Record<string, { numeric: number; alpha: number }> = {
+  '10x10': { numeric: 6,   alpha: 3   },
+  '12x12': { numeric: 10,  alpha: 6   },
+  '14x14': { numeric: 16,  alpha: 10  },
+  '16x16': { numeric: 24,  alpha: 16  },
+  '18x18': { numeric: 36,  alpha: 25  },
+  '20x20': { numeric: 44,  alpha: 31  },
+  '22x22': { numeric: 60,  alpha: 43  },
+  '24x24': { numeric: 72,  alpha: 52  },
+  '26x26': { numeric: 88,  alpha: 64  },
+  '32x32': { numeric: 124, alpha: 91  },
+  '36x36': { numeric: 172, alpha: 127 },
+  '40x40': { numeric: 228, alpha: 169 },
+  '44x44': { numeric: 288, alpha: 214 },
+  '48x48': { numeric: 348, alpha: 259 },
+  '52x52': { numeric: 408, alpha: 304 },
+  '64x64': { numeric: 560, alpha: 418 },
+};
+
 export interface DataMatrixCanonical {
   size: number;
   Y: Float64Array;
