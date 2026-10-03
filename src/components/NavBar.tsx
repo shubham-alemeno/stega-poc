@@ -15,6 +15,9 @@ export default function NavBar() {
           <Link href="/decode" className="text-neutral-300 hover:text-red-400 transition-colors">
             Decode
           </Link>
+          <Link href="/watermark-barcode-poc" className="text-neutral-300 hover:text-red-400 transition-colors">
+            Watermark POC
+          </Link>
         </div>
       </nav>
     </header>
