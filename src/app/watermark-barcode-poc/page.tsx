@@ -105,9 +105,20 @@ export default function WatermarkBarcodePocPage() {
 
       {/* Text */}
       <div>
-        <label className="block text-sm font-medium mb-1">Text (max {MAX_TEXT_LENGTH} chars)</label>
-        <input className="w-full border rounded px-3 py-2 bg-transparent" value={text} maxLength={MAX_TEXT_LENGTH} onChange={e => setText(e.target.value)} />
-        <p className="text-xs text-neutral-500 mt-1">{text.length}/{MAX_TEXT_LENGTH}</p>
+        <label className="block text-sm font-medium mb-1">
+          {barcodeType === 'ts' ? 'Fingerprint ID (exactly 8 characters)' : `Text (max ${MAX_TEXT_LENGTH} chars)`}
+        </label>
+        <input
+          className="w-full border rounded px-3 py-2 bg-transparent"
+          value={text}
+          maxLength={barcodeType === 'ts' ? 8 : MAX_TEXT_LENGTH}
+          onChange={e => setText(e.target.value)}
+        />
+        <p className="text-xs text-neutral-500 mt-1">
+          {barcodeType === 'ts'
+            ? <span className={text.length === 8 ? 'text-green-400' : 'text-amber-400'}>{text.length}/8{text.length !== 8 ? ' — must be exactly 8' : ' ✓'}</span>
+            : `${text.length}/${MAX_TEXT_LENGTH}`}
+        </p>
       </div>
 
       {/* QR-specific */}
