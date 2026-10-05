@@ -6,8 +6,10 @@ import type { LayerSpec } from '@/lib/multiEncode';
 import { generateQrNative, embedWatermarkGrid, computeGridGeometry, lumaToPhysicalPng, type QrVersion, type EcLevel } from '@/lib/qrWatermarkPoc';
 import { generateDataMatrixNative, embedWatermarkGridDM, DM_SIZES, DM_CAPACITY, type DmSize } from '@/lib/dataMatrixWatermarkPoc';
 import { MAX_TEXT_LENGTH, MIN_GRID_SIZE, MAX_GRID_SIZE, MIN_STRENGTH, MAX_STRENGTH, DEFAULT_SEED_STRING, DEFAULT_STRENGTH, DEFAULT_GRID_SIZE, DEFAULT_MM_SIZE, DEFAULT_DM_SCALE } from '@/lib/dataMatrixWatermarkPoc';
+import { generateTsMarker, TS_SPEC } from '@/lib/tsFingerprint';
+import { generateSeedBits } from '@/lib/qrWatermarkPoc';
 
-type BarcodeType = 'qr' | 'datamatrix';
+type BarcodeType = 'qr' | 'datamatrix' | 'ts';
 const QR_VERSIONS: QrVersion[] = [1, 2, 3, 4, 5];
 const EC_LEVELS: EcLevel[] = ['L', 'M', 'Q', 'H'];
 
@@ -47,12 +49,26 @@ export default function WatermarkBarcodePocPage() {
         watermarkedY = r.watermarkedY; nativeSize = r.nativeSize; layersApplied = r.layersApplied;
         seedBitsString = r.seedBitsString;
         carrierInfo = `QR v${qrVersion} EC-${ecLevel} · ${qr.moduleCount}x${qr.moduleCount} modules · native ${qr.size}x${qr.size}px`;
-      } else {
+      } else if (barcodeType === 'datamatrix') {
         const dm = await generateDataMatrixNative(text, dmSize, dmScale);
         const r = embedWatermarkGridDM(dm, gridSize, layers, strength, seed);
         watermarkedY = r.watermarkedY; nativeSize = r.nativeSize; layersApplied = r.layersApplied;
         seedBitsString = r.seedBitsString;
         carrierInfo = `Data Matrix ${dmSize} · scale ${dmScale}px/module · native ${dm.size}x${dm.size}px`;
+      } else {
+        // TS Fingerprint — fixed spec, no carrier-specific inputs beyond seed
+        if (text.length !== 8) throw new Error('TS Fingerprint requires exactly an 8-character fingerprint ID');
+        const marker = await generateTsMarker(text, seed);
+        // Wrap the flat pixel array as a Float64Array for the shared watermarking path
+        const Y = new Float64Array(marker.pixels.length);
+        for (let i = 0; i < marker.pixels.length; i++) Y[i] = marker.pixels[i];
+        const r = embedWatermarkGrid(
+          { size: marker.size, moduleCount: marker.size, Y },
+          gridSize, layers, strength, seed
+        );
+        watermarkedY = r.watermarkedY; nativeSize = r.nativeSize; layersApplied = r.layersApplied;
+        seedBitsString = generateSeedBits(seed, r.geometry.bitCapacity).join('');
+        carrierInfo = `TS Fingerprint · fixed spec ${TS_SPEC.final_px}x${TS_SPEC.final_px}px · ${TS_SPEC.total_data_bits} data bits · ${TS_SPEC.copies} copies`;
       }
       const pc = document.createElement('canvas');
       pc.width = pc.height = nativeSize;
@@ -79,10 +95,10 @@ export default function WatermarkBarcodePocPage() {
 
       {/* Toggle */}
       <div className="inline-flex rounded-lg border border-neutral-300 overflow-hidden text-sm font-medium">
-        {(['qr', 'datamatrix'] as BarcodeType[]).map(t => (
+        {([['qr', 'QR Code'], ['datamatrix', 'Data Matrix'], ['ts', 'TS Fingerprint']] as [BarcodeType, string][]).map(([t, label]) => (
           <button key={t} onClick={() => { setBarcodeType(t); resetOutput(); }}
             className={`px-5 py-2 transition-colors ${barcodeType === t ? 'bg-black text-white' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}>
-            {t === 'qr' ? 'QR Code' : 'Data Matrix'}
+            {label}
           </button>
         ))}
       </div>
@@ -137,6 +153,18 @@ export default function WatermarkBarcodePocPage() {
         </div>
       )}
 
+      {/* TS Fingerprint info panel */}
+      {barcodeType === 'ts' && (
+        <div className="p-4 border rounded bg-neutral-900 text-xs text-neutral-400 space-y-1">
+          <p className="text-neutral-200 font-medium text-sm mb-2">TS Fingerprint — Fixed spec</p>
+          <p>Final marker: <span className="text-neutral-100">{TS_SPEC.final_px}×{TS_SPEC.final_px}px ({(TS_SPEC.final_px * TS_SPEC.per_px_mm).toFixed(1)}mm)</span></p>
+          <p>Outer border: <span className="text-neutral-100">{TS_SPEC.outer_border}px</span> · White border: <span className="text-neutral-100">{TS_SPEC.white_border}px</span> · Alignment square: <span className="text-neutral-100">{TS_SPEC.small_square}px</span></p>
+          <p>Grid: <span className="text-neutral-100">{TS_SPEC.grid_cells}×{TS_SPEC.grid_cells} cells</span> ({TS_SPEC.grid_px}×{TS_SPEC.grid_px}px, {TS_SPEC.cell_size}px/cell)</p>
+          <p>Data: <span className="text-neutral-100">{TS_SPEC.total_data_bits} bits total · {TS_SPEC.payload_bits} bits payload · {TS_SPEC.copies} copies</span></p>
+          <p className="text-amber-400 mt-2">Corner code squares omitted per POC spec. Payload text must be exactly 8 characters.</p>
+        </div>
+      )}
+
       {/* Shared watermark params */}
       <div>
         <label className="block text-sm font-medium mb-1">Seed (8 characters)</label>
@@ -163,7 +191,7 @@ export default function WatermarkBarcodePocPage() {
       </div>
 
       <button onClick={generate} disabled={busy} className="px-4 py-2 rounded bg-black text-white disabled:opacity-50">
-        {busy ? 'Generating…' : `Generate Watermarked ${barcodeType === 'qr' ? 'QR Code' : 'Data Matrix'}`}
+        {busy ? 'Generating…' : `Generate Watermarked ${barcodeType === 'qr' ? 'QR Code' : barcodeType === 'datamatrix' ? 'Data Matrix' : 'TS Fingerprint'}`}
       </button>
       {error && <p className="text-red-600 text-sm">{error}</p>}
       {stats && <p className="text-sm text-neutral-600">{stats}</p>}
