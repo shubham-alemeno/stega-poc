@@ -6,7 +6,7 @@ import type { LayerSpec } from '@/lib/multiEncode';
 import { generateQrNative, embedWatermarkGrid, computeGridGeometry, lumaToPhysicalPng, type QrVersion, type EcLevel } from '@/lib/qrWatermarkPoc';
 import { generateDataMatrixNative, embedWatermarkGridDM, DM_SIZES, DM_CAPACITY, type DmSize } from '@/lib/dataMatrixWatermarkPoc';
 import { MAX_TEXT_LENGTH, MIN_GRID_SIZE, MAX_GRID_SIZE, MIN_STRENGTH, MAX_STRENGTH, DEFAULT_SEED_STRING, DEFAULT_STRENGTH, DEFAULT_GRID_SIZE, DEFAULT_MM_SIZE, DEFAULT_DM_SCALE } from '@/lib/dataMatrixWatermarkPoc';
-import { generateTsMarker, TS_SPEC } from '@/lib/tsFingerprint';
+import { generateTsMarker, decodeTsMarker, TS_SPEC } from '@/lib/tsFingerprint';
 import { generateSeedBits } from '@/lib/qrWatermarkPoc';
 
 type BarcodeType = 'qr' | 'datamatrix' | 'ts';
@@ -26,6 +26,13 @@ export default function WatermarkBarcodePocPage() {
   const [dmSize, setDmSize] = useState<DmSize>('auto');
   const [dmScale, setDmScale] = useState(DEFAULT_DM_SCALE);
   const [brandSeed, setBrandSeed] = useState('');
+  const [tsMode, setTsMode] = useState<'encode' | 'decode'>('encode');
+  const [decodeImage, setDecodeImage] = useState<ImageData | null>(null);
+  const [decodeImageUrl, setDecodeImageUrl] = useState<string | null>(null);
+  const [decodeDecodeSeed, setDecodeDecodeSeed] = useState(DEFAULT_SEED_STRING);
+  const [decodeBrandSeed, setDecodeBrandSeed] = useState('');
+  const [decodeResult, setDecodeResult] = useState<{ fingerprintId: string; bitMatchPct: number } | null>(null);
+  const [decodeError, setDecodeError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [bitsString, setBitsString] = useState<string | null>(null);
@@ -36,6 +43,34 @@ export default function WatermarkBarcodePocPage() {
   const geo = useMemo(() => computeGridGeometry(gridSize), [gridSize]);
 
   function resetOutput() { setError(null); setStats(null); setBitsString(null); setPreviewUrl(null); setDl1x(null); setDl2x(null); }
+
+  function handleDecodeImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setDecodeResult(null); setDecodeError(null);
+    const url = URL.createObjectURL(file);
+    setDecodeImageUrl(url);
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width; canvas.height = img.height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0);
+      setDecodeImage(ctx.getImageData(0, 0, img.width, img.height));
+    };
+    img.src = url;
+  }
+
+  async function handleDecode() {
+    if (!decodeImage) { setDecodeError('Upload an image first.'); return; }
+    setDecodeError(null); setDecodeResult(null);
+    try {
+      const result = await decodeTsMarker(decodeImage, decodeDecodeSeed, decodeBrandSeed || undefined);
+      setDecodeResult({ fingerprintId: result.fingerprintId, bitMatchPct: result.bitMatchPct });
+    } catch (e) {
+      setDecodeError(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   async function generate() {
     resetOutput();
@@ -165,8 +200,20 @@ export default function WatermarkBarcodePocPage() {
         </div>
       )}
 
-      {/* TS Fingerprint info panel */}
+      {/* TS encode/decode sub-toggle */}
       {barcodeType === 'ts' && (
+        <div className="inline-flex rounded-lg border border-neutral-700 overflow-hidden text-xs font-medium">
+          {(['encode', 'decode'] as const).map(m => (
+            <button key={m} onClick={() => { setTsMode(m); setDecodeResult(null); setDecodeError(null); }}
+              className={`px-4 py-1.5 transition-colors ${tsMode === m ? 'bg-neutral-700 text-white' : 'bg-transparent text-neutral-400 hover:text-neutral-200'}`}>
+              {m === 'encode' ? 'Encode' : 'Decode'}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* TS Fingerprint info panel */}
+      {barcodeType === 'ts' && tsMode === 'encode' && (
         <div className="p-4 border rounded bg-neutral-900 text-xs text-neutral-400 space-y-1">
           <p className="text-neutral-200 font-medium text-sm mb-2">TS Fingerprint — Fixed spec</p>
           <p>Final marker: <span className="text-neutral-100">{TS_SPEC.final_px}×{TS_SPEC.final_px}px ({(TS_SPEC.final_px * TS_SPEC.per_px_mm).toFixed(1)}mm)</span></p>
@@ -177,10 +224,10 @@ export default function WatermarkBarcodePocPage() {
         </div>
       )}
 
-      {/* Brand / use-case seed — TS only */}
+      {/* Mask / use-case seed — TS only */}
       {barcodeType === 'ts' && (
         <div>
-          <label className="block text-sm font-medium mb-1">Brand / Use-case seed <span className="text-neutral-500 font-normal">(optional)</span></label>
+          <label className="block text-sm font-medium mb-1">Mask / Use-case seed <span className="text-neutral-500 font-normal">(optional)</span></label>
           <input
             className="w-full border rounded px-3 py-2 bg-transparent"
             placeholder="e.g. BrandA, ProductLine2…"
@@ -193,7 +240,49 @@ export default function WatermarkBarcodePocPage() {
         </div>
       )}
 
-      {/* Shared watermark params */}
+      {/* TS Decode section */}
+      {barcodeType === 'ts' && tsMode === 'decode' && (
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Upload encoded TS Fingerprint image</label>
+            <input type="file" accept="image/png,image/jpeg" onChange={handleDecodeImageUpload}
+              className="w-full border rounded px-3 py-2 bg-transparent text-sm" />
+            {decodeImageUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={decodeImageUrl} alt="uploaded" style={{ imageRendering: 'pixelated', maxWidth: '120px', marginTop: '8px', border: '1px solid #444', borderRadius: '4px' }} />
+            )}
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Shared seed (must match encoding)</label>
+            <input className="w-full border rounded px-3 py-2 bg-transparent"
+              value={decodeDecodeSeed} onChange={e => setDecodeDecodeSeed(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Mask / Use-case seed <span className="text-neutral-500 font-normal">(must match encoding, leave blank if none was used)</span></label>
+            <input className="w-full border rounded px-3 py-2 bg-transparent"
+              placeholder="e.g. BrandA…"
+              value={decodeBrandSeed} onChange={e => setDecodeBrandSeed(e.target.value)} />
+          </div>
+          <button onClick={handleDecode} disabled={!decodeImage}
+            className="px-4 py-2 rounded bg-black text-white disabled:opacity-50">
+            Decode
+          </button>
+          {decodeError && <p className="text-red-500 text-sm">{decodeError}</p>}
+          {decodeResult && (
+            <div className="p-4 border rounded bg-neutral-900 space-y-2">
+              <p className="text-sm font-medium text-neutral-200">Decoded Fingerprint ID</p>
+              <p className="text-2xl font-mono font-bold text-white">{decodeResult.fingerprintId}</p>
+              <p className="text-xs text-neutral-400">
+                Vote confidence: <span className={decodeResult.bitMatchPct > 70 ? 'text-green-400' : 'text-amber-400'}>{decodeResult.bitMatchPct}%</span>
+                {' '}— higher means the majority vote across copies was more decisive.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Shared watermark params + generate button — hidden in TS decode mode */}
+      {!(barcodeType === 'ts' && tsMode === 'decode') && (<>
       <div>
         <label className="block text-sm font-medium mb-1">Seed (8 characters)</label>
         <input className="w-full border rounded px-3 py-2 bg-transparent" value={seed} maxLength={8} onChange={e => setSeed(e.target.value)} />
@@ -223,6 +312,7 @@ export default function WatermarkBarcodePocPage() {
       </button>
       {error && <p className="text-red-600 text-sm">{error}</p>}
       {stats && <p className="text-sm text-neutral-600">{stats}</p>}
+      </>)}
 
       {/* Result */}
       <div className="border rounded p-4 flex flex-col items-center gap-3">

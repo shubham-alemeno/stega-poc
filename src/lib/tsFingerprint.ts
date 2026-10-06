@@ -187,3 +187,113 @@ export async function generateTsMarker(
 
   return { pixels, size: S, availableCells: 576 };
 }
+
+// ── Decode ────────────────────────────────────────────────────────────────────
+export interface TsDecodeResult {
+  fingerprintId: string;
+  bitMatchPct: number;     // majority vote confidence across copies
+  rawBits: number[];       // final 64 recovered bits
+}
+
+/**
+ * Decodes a TS Fingerprint marker from an image's pixel data.
+ *
+ * Process:
+ *  1. Crop to the grid area (skip outer border)
+ *  2. Sample each cell (4×4 px → average → threshold at 127)
+ *  3. XOR with brand mask (if provided), then shared seed mask — reverse
+ *     of encode order
+ *  4. Majority vote across all 9 copies to recover 64 raw bits
+ *  5. Convert 64 bits → 8 ASCII characters → fingerprint ID
+ */
+export async function decodeTsMarker(
+  imageData: ImageData,
+  seed: string,
+  brandSeed?: string
+): Promise<TsDecodeResult> {
+  const { final_px, outer_border, grid_px, grid_cells, cell_size } = TS_SPEC;
+  const S = final_px;
+  const B = outer_border;
+  const G = grid_px;
+  const gc = grid_cells;
+  const cs = cell_size;
+
+  // Validate image size
+  if (imageData.width < S || imageData.height < S) {
+    throw new Error(
+      `Image too small: ${imageData.width}x${imageData.height}px, expected at least ${S}x${S}px`
+    );
+  }
+
+  // 1. Sample each cell — average all pixels in the cell, threshold at 127
+  const cellValues = new Uint8Array(gc * gc);
+  for (let cr = 0; cr < gc; cr++) {
+    for (let cc = 0; cc < gc; cc++) {
+      let sum = 0;
+      for (let pr = 0; pr < cs; pr++) {
+        for (let pc = 0; pc < cs; pc++) {
+          const px = B + cr * cs + pr;
+          const py = B + cc * cs + pc;
+          // Convert RGBA to luma using BT.601
+          const idx = (px * imageData.width + py) * 4;
+          const luma = 0.299 * imageData.data[idx] +
+                       0.587 * imageData.data[idx + 1] +
+                       0.114 * imageData.data[idx + 2];
+          sum += luma;
+        }
+      }
+      const avg = sum / (cs * cs);
+      cellValues[cr * gc + cc] = avg > 127 ? 1 : 0;
+    }
+  }
+
+  // 2. Extract available cells in the same order as encode
+  const availMask = buildAvailableMask();
+  const nCells = availMask.filter(Boolean).length; // 576
+  const extracted = new Uint8Array(nCells);
+  let px = 0;
+  for (let i = 0; i < gc * gc; i++) {
+    if (availMask[i]) extracted[px++] = cellValues[i];
+  }
+
+  // 3. Reverse XOR masks (brand first, then shared — opposite of encode)
+  const sharedMask = await makeMask(seed, nCells);
+  const brandMask = brandSeed ? await makeMask(brandSeed + '_brand', nCells) : null;
+
+  const unmasked = new Uint8Array(nCells);
+  for (let i = 0; i < nCells; i++) {
+    let bit = extracted[i];
+    if (brandMask) bit = bit ^ brandMask[i];
+    unmasked[i] = bit ^ sharedMask[i];
+  }
+
+  // 4. Majority vote across 9 copies (576 / 64 = 9)
+  const msgLen = 64; // 8 chars × 8 bits
+  const votes = new Array<number>(msgLen).fill(0);
+  const counts = new Array<number>(msgLen).fill(0);
+  for (let i = 0; i < nCells; i++) {
+    const pos = i % msgLen;
+    votes[pos] += unmasked[i];
+    counts[pos]++;
+  }
+  const rawBits = votes.map((v, i) => (v / counts[i] >= 0.5 ? 1 : 0));
+
+  // Compute confidence (how decisive each vote was)
+  const confidence = votes.map((v, i) => {
+    const ratio = v / counts[i];
+    return Math.abs(ratio - 0.5) * 2; // 0 = 50/50, 1 = unanimous
+  });
+  const bitMatchPct = Math.round(confidence.reduce((a, b) => a + b, 0) / msgLen * 100);
+
+  // 5. Convert 64 bits → 8 ASCII chars
+  let fingerprintId = '';
+  for (let i = 0; i < 8; i++) {
+    let charCode = 0;
+    for (let k = 0; k < 8; k++) {
+      charCode = (charCode << 1) | rawBits[i * 8 + k];
+    }
+    fingerprintId += String.fromCharCode(charCode);
+  }
+
+  return { fingerprintId, bitMatchPct, rawBits };
+}
