@@ -25,6 +25,7 @@ export default function WatermarkBarcodePocPage() {
   const [ecLevel, setEcLevel] = useState<EcLevel>('M');
   const [dmSize, setDmSize] = useState<DmSize>('auto');
   const [dmScale, setDmScale] = useState(DEFAULT_DM_SCALE);
+  const [brandSeed, setBrandSeed] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [bitsString, setBitsString] = useState<string | null>(null);
@@ -58,7 +59,7 @@ export default function WatermarkBarcodePocPage() {
       } else {
         // TS Fingerprint — fixed spec, no carrier-specific inputs beyond seed
         if (text.length !== 8) throw new Error('TS Fingerprint requires exactly an 8-character fingerprint ID');
-        const marker = await generateTsMarker(text, seed);
+        const marker = await generateTsMarker(text, seed, brandSeed || undefined);
         // Wrap the flat pixel array as a Float64Array for the shared watermarking path
         const Y = new Float64Array(marker.pixels.length);
         for (let i = 0; i < marker.pixels.length; i++) Y[i] = marker.pixels[i];
@@ -173,6 +174,22 @@ export default function WatermarkBarcodePocPage() {
           <p>Grid: <span className="text-neutral-100">{TS_SPEC.grid_cells}×{TS_SPEC.grid_cells} cells</span> ({TS_SPEC.grid_px}×{TS_SPEC.grid_px}px, {TS_SPEC.cell_size}px/cell)</p>
           <p>Data: <span className="text-neutral-100">{TS_SPEC.total_data_bits} bits total · {TS_SPEC.payload_bits} bits payload · {TS_SPEC.copies} copies</span></p>
           <p className="text-amber-400 mt-2">Corner code squares omitted per POC spec. Payload text must be exactly 8 characters.</p>
+        </div>
+      )}
+
+      {/* Brand / use-case seed — TS only */}
+      {barcodeType === 'ts' && (
+        <div>
+          <label className="block text-sm font-medium mb-1">Brand / Use-case seed <span className="text-neutral-500 font-normal">(optional)</span></label>
+          <input
+            className="w-full border rounded px-3 py-2 bg-transparent"
+            placeholder="e.g. BrandA, ProductLine2…"
+            value={brandSeed}
+            onChange={e => setBrandSeed(e.target.value)}
+          />
+          <p className="text-xs text-neutral-500 mt-1">
+            Applied as a second XOR pass over the noise grid — the same fingerprint ID encoded for different brands produces completely distinct patterns. Leave blank to skip.
+          </p>
         </div>
       )}
 

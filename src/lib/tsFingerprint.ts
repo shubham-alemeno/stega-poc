@@ -86,7 +86,11 @@ export function fillAvailable(msgBits: number[], nCells: number): Uint8Array {
 }
 
 // ── Grid painting (cell-level, then scale up to pixels) ──────────────────────
-async function paintGrid(fingerprintId: string, seed: string): Promise<Uint8Array> {
+async function paintGrid(
+  fingerprintId: string,
+  seed: string,
+  brandSeed?: string
+): Promise<Uint8Array> {
   const gc = TS_SPEC.grid_cells;
   const cs = TS_SPEC.cell_size;
   const gp = TS_SPEC.grid_px;
@@ -94,16 +98,28 @@ async function paintGrid(fingerprintId: string, seed: string): Promise<Uint8Arra
   const availMask = buildAvailableMask();
   const nCells = availMask.filter(Boolean).length; // = 576
 
+  // Layer 1: shared seed mask (ID encoding)
   const maskArr = await makeMask(seed, nCells);
   const msgBits = encodeIdBits(fingerprintId);
   const flat = fillAvailable(msgBits, nCells);
 
-  // XOR with mask, place into cell grid
+  // Layer 2: brand/use-case mask — applied as a second XOR pass on top of
+  // the already-encoded noise. Independent of the ID encoding: the same
+  // fingerprint ID + shared seed produces a completely different noise
+  // pattern for each brand seed, making two use cases visually and
+  // numerically distinct even when encoding the same ID.
+  const brandMask = brandSeed
+    ? await makeMask(brandSeed + '_brand', nCells)
+    : null;
+
+  // XOR with mask(s), place into cell grid
   const cellCanvas = new Uint8Array(gc * gc).fill(BLACK);
   let px = 0;
   for (let i = 0; i < gc * gc; i++) {
     if (availMask[i]) {
-      cellCanvas[i] = (flat[px] ^ maskArr[px]) === 1 ? WHITE : BLACK;
+      let bit = flat[px] ^ maskArr[px];
+      if (brandMask) bit = bit ^ brandMask[px];
+      cellCanvas[i] = bit === 1 ? WHITE : BLACK;
       px++;
     }
   }
@@ -132,7 +148,8 @@ export interface TsMarkerResult {
 
 export async function generateTsMarker(
   fingerprintId: string,
-  seed: string
+  seed: string,
+  brandSeed?: string
 ): Promise<TsMarkerResult> {
   const { final_px, outer_border, white_border, small_square, grid_px } = TS_SPEC;
   const S = final_px;   // 120
@@ -142,7 +159,7 @@ export async function generateTsMarker(
   const Q = small_square; // 22
   const CZ = Q + 2 * W; // 40px clear zone
 
-  const gridCanvas = await paintGrid(fingerprintId, seed);
+  const gridCanvas = await paintGrid(fingerprintId, seed, brandSeed);
 
   const pixels = new Uint8Array(S * S).fill(BLACK); // outer black border
 
