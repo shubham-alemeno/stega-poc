@@ -1,17 +1,18 @@
-// TS Fingerprint marker — TypeScript port of ts_fingerprint.py for the POC.
+// TS Fingerprint marker — TypeScript POC using Reed-Solomon encoding.
 //
 // Fixed single spec (from the POC spec sheet):
 //   final_px=120, outer_border=8, white_border=9, small_square=22
-//   grid_px=104 (104/4 = 26 cells per side), cell_size=4px
+//   grid_px=104, cell_size=4px, grid_cells=26x26
 //   Available cells: 26x26 - 10x10 (clear zone) = 676 - 100 = 576 cells
-//   Payload: 160 bits, copies: 576/160 = 3.6
+//   RS codeword: 144 bits (payloadCodecRS), fits exactly 4 copies in 576 cells
 //
-// Key difference from production: the 6 corner-code squares (bottom-left +
-// bottom-right triangles) are OMITTED — those cells remain as noise. This
-// is exactly why the spec shows 576 available (not 564 as in production).
-// The clear zone (alignment square + white margin) IS kept.
+// Two POC simplifications vs production ts_fingerprint.py:
+//   1. PRNG: SHA-256 XOR-folded to 32-bit -> mulberry32 (not PCG64)
+//   2. RS parameters: GF(2^6)/144-bit (payloadCodecRS) not GF(2^8)/160-bit (reedsolo)
+// Corner code squares omitted per POC spec.
 
-import { mulberry32 } from './prng';
+import { mulberry32, generateMaskBits, xorBits } from './prng';
+import { prepareTxBitsRS, resolveRxBitsRS } from './payloadCodecRS';
 
 // ── Fixed spec ───────────────────────────────────────────────────────────────
 export const TS_SPEC = {
@@ -19,21 +20,19 @@ export const TS_SPEC = {
   outer_border: 8,
   white_border: 9,
   small_square: 22,
-  grid_px: 104,             // final_px - 2*outer_border = 120 - 16
-  cell_size: 4,             // px per cell: grid_px / grid_cells = 104/26
-  grid_cells: 26,           // cells per side
-  per_px_mm: 7 / 120,      // 7mm physical size
-  total_data_bits: 576,     // available cells (26x26 - 10x10 clear zone)
-  payload_bits: 160,        // 8-char ASCII = 64 bits, but spec uses 160 (RS-protected)
-  copies: 3.6,              // 576 / 160
+  grid_px: 104,
+  cell_size: 4,
+  grid_cells: 26,
+  per_px_mm: 7 / 120,
+  total_data_bits: 576,
+  payload_bits: 144,   // RS codeword unit length (payloadCodecRS)
+  copies: 4,           // 576 / 144 = 4 exact copies
 };
 
 export const WHITE = 255;
 export const BLACK = 0;
 
-// ── Seed -> mask (cell-level) ─────────────────────────────────────────────────
-// SHA-256 -> fold to 32-bit -> mulberry32. Not bit-for-bit identical to
-// Python's PCG64 but deterministic for the POC — flagged in the UI.
+// ── Seed helpers ──────────────────────────────────────────────────────────────
 async function sha256Int(seedString: string): Promise<number> {
   const data = new TextEncoder().encode(seedString);
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
@@ -43,21 +42,11 @@ async function sha256Int(seedString: string): Promise<number> {
   return seed;
 }
 
-export async function makeMask(seedString: string, nCells: number): Promise<Uint8Array> {
-  const seedInt = await sha256Int(seedString);
-  const rand = mulberry32(seedInt);
-  const mask = new Uint8Array(nCells);
-  for (let i = 0; i < nCells; i++) mask[i] = rand() < 0.5 ? 1 : 0;
-  return mask;
-}
-
 // ── Available mask (cell-level) ───────────────────────────────────────────────
-// true = usable for noise, false = reserved (clear zone only, corners omitted).
 export function buildAvailableMask(): boolean[] {
-  const gc = TS_SPEC.grid_cells;    // 26
+  const gc = TS_SPEC.grid_cells;
   const cz_px = TS_SPEC.small_square + 2 * TS_SPEC.white_border; // 40px
-  const cz_cells = Math.ceil(cz_px / TS_SPEC.cell_size); // = 10 cells
-
+  const cz_cells = Math.ceil(cz_px / TS_SPEC.cell_size);         // 10 cells
   const mask = new Array<boolean>(gc * gc).fill(true);
   for (let r = 0; r < cz_cells; r++)
     for (let c = 0; c < cz_cells; c++)
@@ -65,235 +54,150 @@ export function buildAvailableMask(): boolean[] {
   return mask;
 }
 
-// ── Payload encoding ──────────────────────────────────────────────────────────
-// 8-char ASCII -> 64 raw bits, repeated to fill 576 available cells (3.6x).
-// Production uses Reed-Solomon (160 bits = 8 data + 12 parity bytes).
-// POC uses raw repetition — flagged in UI.
-export function encodeIdBits(fingerprintId: string): number[] {
-  if (fingerprintId.length !== 8) throw new Error('TS Fingerprint ID must be exactly 8 characters');
-  const bits: number[] = [];
-  for (let i = 0; i < fingerprintId.length; i++) {
-    const b = fingerprintId.charCodeAt(i);
-    for (let k = 7; k >= 0; k--) bits.push((b >> k) & 1);
-  }
-  return bits; // 64 bits
-}
-
-export function fillAvailable(msgBits: number[], nCells: number): Uint8Array {
-  const flat = new Uint8Array(nCells);
-  for (let i = 0; i < nCells; i++) flat[i] = msgBits[i % msgBits.length];
-  return flat;
-}
-
-// ── Grid painting (cell-level, then scale up to pixels) ──────────────────────
+// ── Grid painting ─────────────────────────────────────────────────────────────
 async function paintGrid(
   fingerprintId: string,
   seed: string,
-  brandSeed?: string
+  maskSeed?: string
 ): Promise<Uint8Array> {
   const gc = TS_SPEC.grid_cells;
   const cs = TS_SPEC.cell_size;
   const gp = TS_SPEC.grid_px;
 
   const availMask = buildAvailableMask();
-  const nCells = availMask.filter(Boolean).length; // = 576
+  const nCells = availMask.filter(Boolean).length; // 576
 
-  // Layer 1: shared seed mask (ID encoding)
-  const maskArr = await makeMask(seed, nCells);
-  const msgBits = encodeIdBits(fingerprintId);
-  const flat = fillAvailable(msgBits, nCells);
+  // RS-encode the ID into a repeating bit stream using payloadCodecRS
+  const seedInt = await sha256Int(seed);
+  const { txBits } = prepareTxBitsRS(fingerprintId, nCells, seedInt);
 
-  // Layer 2: brand/use-case mask — applied as a second XOR pass on top of
-  // the already-encoded noise. Independent of the ID encoding: the same
-  // fingerprint ID + shared seed produces a completely different noise
-  // pattern for each brand seed, making two use cases visually and
-  // numerically distinct even when encoding the same ID.
-  const brandMask = brandSeed
-    ? await makeMask(brandSeed + '_brand', nCells)
-    : null;
+  // Optional second XOR pass: mask/use-case seed for brand isolation
+  let finalBits = txBits;
+  if (maskSeed) {
+    const maskSeedInt = await sha256Int(maskSeed + '_mask');
+    const brandMask = generateMaskBits(maskSeedInt, nCells);
+    finalBits = xorBits(txBits, brandMask);
+  }
 
-  // XOR with mask(s), place into cell grid
+  // Place into cell grid and scale up to pixels
   const cellCanvas = new Uint8Array(gc * gc).fill(BLACK);
   let px = 0;
   for (let i = 0; i < gc * gc; i++) {
-    if (availMask[i]) {
-      let bit = flat[px] ^ maskArr[px];
-      if (brandMask) bit = bit ^ brandMask[px];
-      cellCanvas[i] = bit === 1 ? WHITE : BLACK;
-      px++;
-    }
+    if (availMask[i]) cellCanvas[i] = finalBits[px++] === 1 ? WHITE : BLACK;
   }
 
-  // Scale cell grid up to pixel grid (each cell = cell_size x cell_size px)
   const pixelCanvas = new Uint8Array(gp * gp);
-  for (let cr = 0; cr < gc; cr++) {
+  for (let cr = 0; cr < gc; cr++)
     for (let cc = 0; cc < gc; cc++) {
       const val = cellCanvas[cr * gc + cc];
-      for (let pr = 0; pr < cs; pr++) {
-        for (let pc = 0; pc < cs; pc++) {
+      for (let pr = 0; pr < cs; pr++)
+        for (let pc = 0; pc < cs; pc++)
           pixelCanvas[(cr * cs + pr) * gp + (cc * cs + pc)] = val;
-        }
-      }
     }
-  }
   return pixelCanvas;
 }
 
 // ── Full marker rendering ─────────────────────────────────────────────────────
 export interface TsMarkerResult {
-  pixels: Uint8Array;    // final_px * final_px, 8-bit grayscale
-  size: number;          // final_px
-  availableCells: number; // 576
+  pixels: Uint8Array;
+  size: number;
+  availableCells: number;
 }
 
 export async function generateTsMarker(
   fingerprintId: string,
   seed: string,
-  brandSeed?: string
+  maskSeed?: string
 ): Promise<TsMarkerResult> {
   const { final_px, outer_border, white_border, small_square, grid_px } = TS_SPEC;
-  const S = final_px;   // 120
-  const B = outer_border; // 8
-  const G = grid_px;    // 104
-  const W = white_border; // 9
-  const Q = small_square; // 22
-  const CZ = Q + 2 * W; // 40px clear zone
+  const S = final_px, B = outer_border, G = grid_px;
+  const W = white_border, Q = small_square, CZ = Q + 2 * W;
 
-  const gridCanvas = await paintGrid(fingerprintId, seed, brandSeed);
+  const gridCanvas = await paintGrid(fingerprintId, seed, maskSeed);
+  const pixels = new Uint8Array(S * S).fill(BLACK);
 
-  const pixels = new Uint8Array(S * S).fill(BLACK); // outer black border
-
-  // White grid area
   for (let r = B; r < B + G; r++)
     for (let c = B; c < B + G; c++)
       pixels[r * S + c] = WHITE;
 
-  // Paste noise grid
   for (let r = 0; r < G; r++)
     for (let c = 0; c < G; c++)
       pixels[(B + r) * S + (B + c)] = gridCanvas[r * G + c];
 
-  // Clear zone (white)
   for (let r = B; r < B + CZ; r++)
     for (let c = B; c < B + CZ; c++)
       pixels[r * S + c] = WHITE;
 
-  // Alignment square (black)
   for (let r = B + W; r < B + W + Q; r++)
     for (let c = B + W; c < B + W + Q; c++)
       pixels[r * S + c] = BLACK;
-
-  // Corner code squares intentionally omitted (POC spec).
 
   return { pixels, size: S, availableCells: 576 };
 }
 
 // ── Decode ────────────────────────────────────────────────────────────────────
 export interface TsDecodeResult {
-  fingerprintId: string;
-  bitMatchPct: number;     // majority vote confidence across copies
-  rawBits: number[];       // final 64 recovered bits
+  fingerprintId: string | null;
+  validCopies: number;
+  totalCopies: number;
+  errorsFixed: number;
+  status: 'ok' | 'failed';
 }
 
-/**
- * Decodes a TS Fingerprint marker from an image's pixel data.
- *
- * Process:
- *  1. Crop to the grid area (skip outer border)
- *  2. Sample each cell (4×4 px → average → threshold at 127)
- *  3. XOR with brand mask (if provided), then shared seed mask — reverse
- *     of encode order
- *  4. Majority vote across all 9 copies to recover 64 raw bits
- *  5. Convert 64 bits → 8 ASCII characters → fingerprint ID
- */
 export async function decodeTsMarker(
   imageData: ImageData,
   seed: string,
-  brandSeed?: string
+  maskSeed?: string
 ): Promise<TsDecodeResult> {
   const { final_px, outer_border, grid_px, grid_cells, cell_size } = TS_SPEC;
-  const S = final_px;
-  const B = outer_border;
-  const G = grid_px;
-  const gc = grid_cells;
-  const cs = cell_size;
+  const S = final_px, B = outer_border, gc = grid_cells, cs = cell_size;
 
-  // Validate image size
-  if (imageData.width < S || imageData.height < S) {
-    throw new Error(
-      `Image too small: ${imageData.width}x${imageData.height}px, expected at least ${S}x${S}px`
-    );
-  }
+  if (imageData.width < S || imageData.height < S)
+    throw new Error(`Image too small: ${imageData.width}x${imageData.height}px, need at least ${S}x${S}px`);
 
-  // 1. Sample each cell — average all pixels in the cell, threshold at 127
+  // 1. Sample each cell (4×4 px → average → threshold at 127)
   const cellValues = new Uint8Array(gc * gc);
-  for (let cr = 0; cr < gc; cr++) {
+  for (let cr = 0; cr < gc; cr++)
     for (let cc = 0; cc < gc; cc++) {
       let sum = 0;
-      for (let pr = 0; pr < cs; pr++) {
+      for (let pr = 0; pr < cs; pr++)
         for (let pc = 0; pc < cs; pc++) {
-          const px = B + cr * cs + pr;
-          const py = B + cc * cs + pc;
-          // Convert RGBA to luma using BT.601
-          const idx = (px * imageData.width + py) * 4;
-          const luma = 0.299 * imageData.data[idx] +
-                       0.587 * imageData.data[idx + 1] +
-                       0.114 * imageData.data[idx + 2];
-          sum += luma;
+          const row = B + cr * cs + pr;
+          const col = B + cc * cs + pc;
+          const idx = (row * imageData.width + col) * 4;
+          sum += 0.299 * imageData.data[idx] + 0.587 * imageData.data[idx + 1] + 0.114 * imageData.data[idx + 2];
         }
-      }
-      const avg = sum / (cs * cs);
-      cellValues[cr * gc + cc] = avg > 127 ? 1 : 0;
+      cellValues[cr * gc + cc] = sum / (cs * cs) > 127 ? 1 : 0;
     }
-  }
 
-  // 2. Extract available cells in the same order as encode
+  // 2. Extract available cells
   const availMask = buildAvailableMask();
-  const nCells = availMask.filter(Boolean).length; // 576
-  const extracted = new Uint8Array(nCells);
-  let px = 0;
-  for (let i = 0; i < gc * gc; i++) {
-    if (availMask[i]) extracted[px++] = cellValues[i];
+  const nCells = availMask.filter(Boolean).length;
+  const extracted: number[] = [];
+  for (let i = 0; i < gc * gc; i++)
+    if (availMask[i]) extracted.push(cellValues[i]);
+
+  // 3. Reverse brand mask if used (applied after RS mask on encode, so undo first)
+  let rxBits = extracted;
+  if (maskSeed) {
+    const maskSeedInt = await sha256Int(maskSeed + '_mask');
+    const brandMask = generateMaskBits(maskSeedInt, nCells);
+    rxBits = xorBits(extracted, brandMask);
   }
 
-  // 3. Reverse XOR masks (brand first, then shared — opposite of encode)
-  const sharedMask = await makeMask(seed, nCells);
-  const brandMask = brandSeed ? await makeMask(brandSeed + '_brand', nCells) : null;
+  // 4. RS decode via resolveRxBitsRS (handles unmask + majority vote + RS correction)
+  const seedInt = await sha256Int(seed);
+  const result = resolveRxBitsRS(rxBits, seedInt);
 
-  const unmasked = new Uint8Array(nCells);
-  for (let i = 0; i < nCells; i++) {
-    let bit = extracted[i];
-    if (brandMask) bit = bit ^ brandMask[i];
-    unmasked[i] = bit ^ sharedMask[i];
+  if (!result.message) {
+    return { fingerprintId: null, validCopies: result.validCopies, totalCopies: result.totalCopies, errorsFixed: 0, status: 'failed' };
   }
 
-  // 4. Majority vote across 9 copies (576 / 64 = 9)
-  const msgLen = 64; // 8 chars × 8 bits
-  const votes = new Array<number>(msgLen).fill(0);
-  const counts = new Array<number>(msgLen).fill(0);
-  for (let i = 0; i < nCells; i++) {
-    const pos = i % msgLen;
-    votes[pos] += unmasked[i];
-    counts[pos]++;
-  }
-  const rawBits = votes.map((v, i) => (v / counts[i] >= 0.5 ? 1 : 0));
-
-  // Compute confidence (how decisive each vote was)
-  const confidence = votes.map((v, i) => {
-    const ratio = v / counts[i];
-    return Math.abs(ratio - 0.5) * 2; // 0 = 50/50, 1 = unanimous
-  });
-  const bitMatchPct = Math.round(confidence.reduce((a, b) => a + b, 0) / msgLen * 100);
-
-  // 5. Convert 64 bits → 8 ASCII chars
-  let fingerprintId = '';
-  for (let i = 0; i < 8; i++) {
-    let charCode = 0;
-    for (let k = 0; k < 8; k++) {
-      charCode = (charCode << 1) | rawBits[i * 8 + k];
-    }
-    fingerprintId += String.fromCharCode(charCode);
-  }
-
-  return { fingerprintId, bitMatchPct, rawBits };
+  return {
+    fingerprintId: result.message,
+    validCopies: result.validCopies,
+    totalCopies: result.totalCopies,
+    errorsFixed: result.totalSymbolErrorsCorrected,
+    status: 'ok',
+  };
 }

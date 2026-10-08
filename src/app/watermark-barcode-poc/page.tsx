@@ -40,7 +40,7 @@ export default function WatermarkBarcodePocPage() {
   const [decodeImageUrl, setDecodeImageUrl] = useState<string | null>(null);
   const [decodeDecodeSeed, setDecodeDecodeSeed] = useState(DEFAULT_SEED_STRING);
   const [decodeMaskSeed, setDecodeMaskSeed] = useState(''); // decode: 10-char
-  const [decodeResult, setDecodeResult] = useState<{ fingerprintId: string; bitMatchPct: number } | null>(null);
+  const [decodeResult, setDecodeResult] = useState<{ fingerprintId: string; validCopies: number; totalCopies: number; errorsFixed: number } | null>(null);
   const [decodeError, setDecodeError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,15 +75,13 @@ export default function WatermarkBarcodePocPage() {
     setDecodeError(null); setDecodeResult(null);
     try {
       const result = await decodeTsMarker(decodeImage, decodeDecodeSeed, decodeMaskSeed || undefined);
-      const CONFIDENCE_THRESHOLD = 70;
-      if (result.bitMatchPct < CONFIDENCE_THRESHOLD) {
+      if (result.status === 'failed') {
         setDecodeError(
-          `Decode failed — vote confidence too low (${result.bitMatchPct}%). ` +
-          `This usually means the watermark seed or mask seed doesn't match the one used during encoding, ` +
-          `or the image has been significantly distorted.`
+          `Decode failed — Reed-Solomon found no valid codeword across ${result.totalCopies} copies. ` +
+          `Check that the watermark seed and mask seed match exactly what was used during encoding.`
         );
       } else {
-        setDecodeResult({ fingerprintId: result.fingerprintId, bitMatchPct: result.bitMatchPct });
+        setDecodeResult({ fingerprintId: result.fingerprintId!, validCopies: result.validCopies, totalCopies: result.totalCopies, errorsFixed: result.errorsFixed });
       }
     } catch (e) {
       setDecodeError(e instanceof Error ? e.message : String(e));
@@ -313,10 +311,10 @@ export default function WatermarkBarcodePocPage() {
           {decodeResult && (
             <div className="p-4 border rounded bg-neutral-900 space-y-2">
               <p className="text-sm font-medium text-neutral-200">Decoded Fingerprint ID</p>
-              <p className="text-2xl font-mono font-bold text-white">{decodeResult.fingerprintId}</p>
+              <p className="text-2xl font-mono font-bold text-green-400">{decodeResult.fingerprintId}</p>
               <p className="text-xs text-neutral-400">
-                Vote confidence: <span className={decodeResult.bitMatchPct > 70 ? 'text-green-400' : 'text-amber-400'}>{decodeResult.bitMatchPct}%</span>
-                {' '}— higher means the majority vote across copies was more decisive.
+                Valid copies: <span className="text-neutral-200">{decodeResult.validCopies} / {decodeResult.totalCopies}</span>
+                {decodeResult.errorsFixed > 0 && <> · RS corrected <span className="text-amber-400">{decodeResult.errorsFixed} symbol error{decodeResult.errorsFixed !== 1 ? 's' : ''}</span></>}
               </p>
             </div>
           )}
