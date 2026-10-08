@@ -240,8 +240,8 @@ export default function WatermarkBarcodePocPage() {
         </div>
       )}
 
-      {/* Mask / use-case seed — TS only */}
-      {barcodeType === 'ts' && (
+      {/* Mask / use-case seed — TS encode only */}
+      {barcodeType === 'ts' && tsMode === 'encode' && (
         <div>
           <label className="block text-sm font-medium mb-1">
             Fingerprint ID mask seed <span className="text-neutral-500 font-normal">(optional, {TS_MASK_SEED_GEN_LEN} characters)</span>
