@@ -7,6 +7,12 @@ import { generateQrNative, embedWatermarkGrid, computeGridGeometry, lumaToPhysic
 import { generateDataMatrixNative, embedWatermarkGridDM, DM_SIZES, DM_CAPACITY, type DmSize } from '@/lib/dataMatrixWatermarkPoc';
 import { MAX_TEXT_LENGTH, MIN_GRID_SIZE, MAX_GRID_SIZE, MIN_STRENGTH, MAX_STRENGTH, DEFAULT_SEED_STRING, DEFAULT_STRENGTH, DEFAULT_GRID_SIZE, DEFAULT_MM_SIZE, DEFAULT_DM_SCALE } from '@/lib/dataMatrixWatermarkPoc';
 import { generateTsMarker, decodeTsMarker, TS_SPEC } from '@/lib/tsFingerprint';
+
+// TS-specific defaults — separate from QR/DM shared constants
+const TS_DEFAULT_GRID_SIZE = 15;
+const TS_DEFAULT_MM_SIZE = 7;
+const TS_MASK_SEED_GEN_LEN = 6;    // encode: 6-char mask seed
+const TS_MASK_SEED_DEC_LEN = 10;   // decode: 10-char mask seed
 import { generateSeedBits } from '@/lib/qrWatermarkPoc';
 
 type BarcodeType = 'qr' | 'datamatrix' | 'ts';
@@ -18,19 +24,22 @@ export default function WatermarkBarcodePocPage() {
   const [text, setText] = useState('https://example.com/verify/ABC123');
   const [seed, setSeed] = useState(DEFAULT_SEED_STRING);
   const [strength, setStrength] = useState(DEFAULT_STRENGTH);
+  // Grid size and MM size: TS uses its own defaults; QR/DM use the shared ones
   const [gridSize, setGridSize] = useState(DEFAULT_GRID_SIZE);
+  const [tsGridSize, setTsGridSize] = useState(TS_DEFAULT_GRID_SIZE);
   const [layers, setLayers] = useState<LayerSpec[]>([{ coeff1: { u: 3, v: 1 }, coeff2: { u: 1, v: 3 } }]);
   const [mmSize, setMmSize] = useState(DEFAULT_MM_SIZE);
+  const [tsMmSize, setTsMmSize] = useState(TS_DEFAULT_MM_SIZE);
   const [qrVersion, setQrVersion] = useState<QrVersion>(5);
   const [ecLevel, setEcLevel] = useState<EcLevel>('M');
   const [dmSize, setDmSize] = useState<DmSize>('auto');
   const [dmScale, setDmScale] = useState(DEFAULT_DM_SCALE);
-  const [brandSeed, setBrandSeed] = useState('');
+  const [maskSeed, setMaskSeed] = useState('');          // encode: 6-char
   const [tsMode, setTsMode] = useState<'encode' | 'decode'>('encode');
   const [decodeImage, setDecodeImage] = useState<ImageData | null>(null);
   const [decodeImageUrl, setDecodeImageUrl] = useState<string | null>(null);
   const [decodeDecodeSeed, setDecodeDecodeSeed] = useState(DEFAULT_SEED_STRING);
-  const [decodeBrandSeed, setDecodeBrandSeed] = useState('');
+  const [decodeMaskSeed, setDecodeMaskSeed] = useState(''); // decode: 10-char
   const [decodeResult, setDecodeResult] = useState<{ fingerprintId: string; bitMatchPct: number } | null>(null);
   const [decodeError, setDecodeError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -65,7 +74,7 @@ export default function WatermarkBarcodePocPage() {
     if (!decodeImage) { setDecodeError('Upload an image first.'); return; }
     setDecodeError(null); setDecodeResult(null);
     try {
-      const result = await decodeTsMarker(decodeImage, decodeDecodeSeed, decodeBrandSeed || undefined);
+      const result = await decodeTsMarker(decodeImage, decodeDecodeSeed, decodeMaskSeed || undefined);
       setDecodeResult({ fingerprintId: result.fingerprintId, bitMatchPct: result.bitMatchPct });
     } catch (e) {
       setDecodeError(e instanceof Error ? e.message : String(e));
@@ -74,8 +83,10 @@ export default function WatermarkBarcodePocPage() {
 
   async function generate() {
     resetOutput();
-    if (seed.length !== 8) { setError('Seed must be exactly 8 characters.'); return; }
     if (!layers.length) { setError('At least one coefficient pair required.'); return; }
+    if (barcodeType === 'ts' && maskSeed && maskSeed.length !== TS_MASK_SEED_GEN_LEN) {
+      setError(`Mask seed must be exactly ${TS_MASK_SEED_GEN_LEN} characters when provided.`); return;
+    }
     setBusy(true);
     try {
       let watermarkedY: Float64Array, nativeSize: number, layersApplied: number, seedBitsString: string, carrierInfo: string;
@@ -92,19 +103,20 @@ export default function WatermarkBarcodePocPage() {
         seedBitsString = r.seedBitsString;
         carrierInfo = `Data Matrix ${dmSize} · scale ${dmScale}px/module · native ${dm.size}x${dm.size}px`;
       } else {
-        // TS Fingerprint — fixed spec, no carrier-specific inputs beyond seed
-        if (text.length !== 8) throw new Error('TS Fingerprint requires exactly an 8-character fingerprint ID');
-        const marker = await generateTsMarker(text, seed, brandSeed || undefined);
-        // Wrap the flat pixel array as a Float64Array for the shared watermarking path
+        // TS Fingerprint — ID is optional (random 8-char if blank)
+        const tsId = text.length === 8 ? text
+          : text.length === 0 ? Math.random().toString(36).slice(2, 10).toUpperCase().padEnd(8, '0')
+          : (() => { throw new Error('Fingerprint ID must be exactly 8 characters, or leave blank for a random ID'); })();
+        const marker = await generateTsMarker(tsId, seed, maskSeed || undefined);
         const Y = new Float64Array(marker.pixels.length);
         for (let i = 0; i < marker.pixels.length; i++) Y[i] = marker.pixels[i];
         const r = embedWatermarkGrid(
           { size: marker.size, moduleCount: marker.size, Y },
-          gridSize, layers, strength, seed
+          tsGridSize, layers, strength, seed
         );
         watermarkedY = r.watermarkedY; nativeSize = r.nativeSize; layersApplied = r.layersApplied;
         seedBitsString = generateSeedBits(seed, r.geometry.bitCapacity).join('');
-        carrierInfo = `TS Fingerprint · fixed spec ${TS_SPEC.final_px}x${TS_SPEC.final_px}px · ${TS_SPEC.total_data_bits} data bits · ${TS_SPEC.copies} copies`;
+        carrierInfo = `TS Fingerprint · ID: ${tsId} · ${TS_SPEC.final_px}x${TS_SPEC.final_px}px · ${TS_SPEC.total_data_bits} data bits`;
       }
       const pc = document.createElement('canvas');
       pc.width = pc.height = nativeSize;
@@ -116,8 +128,9 @@ export default function WatermarkBarcodePocPage() {
       }
       ctx.putImageData(id, 0, 0);
       setPreviewUrl(pc.toDataURL('image/png'));
-      setDl1x(URL.createObjectURL(lumaToPhysicalPng(watermarkedY, nativeSize, 1, mmSize)));
-      setDl2x(URL.createObjectURL(lumaToPhysicalPng(watermarkedY, nativeSize, 2, mmSize)));
+      const activeMm = barcodeType === 'ts' ? tsMmSize : mmSize;
+      setDl1x(URL.createObjectURL(lumaToPhysicalPng(watermarkedY, nativeSize, 1, activeMm)));
+      setDl2x(URL.createObjectURL(lumaToPhysicalPng(watermarkedY, nativeSize, 2, activeMm)));
       setBitsString(seedBitsString);
       setStats(`${carrierInfo} · grid ${gridSize}x${gridSize} (${geo.canonicalSize}x${geo.canonicalSize}px) · ${geo.bitCapacity} bits · ${layersApplied} layer(s) · strength=${strength}`);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
@@ -142,17 +155,20 @@ export default function WatermarkBarcodePocPage() {
       {/* Text */}
       <div>
         <label className="block text-sm font-medium mb-1">
-          {barcodeType === 'ts' ? 'Fingerprint ID (exactly 8 characters)' : `Text (max ${MAX_TEXT_LENGTH} chars)`}
+          {barcodeType === 'ts' ? 'Fingerprint ID (8 characters, optional)' : `Text (max ${MAX_TEXT_LENGTH} chars)`}
         </label>
         <input
           className="w-full border rounded px-3 py-2 bg-transparent"
           value={text}
           maxLength={barcodeType === 'ts' ? 8 : MAX_TEXT_LENGTH}
           onChange={e => setText(e.target.value)}
+          placeholder={barcodeType === 'ts' ? 'Leave blank for a random ID' : ''}
         />
         <p className="text-xs text-neutral-500 mt-1">
           {barcodeType === 'ts'
-            ? <span className={text.length === 8 ? 'text-green-400' : 'text-amber-400'}>{text.length}/8{text.length !== 8 ? ' — must be exactly 8' : ' ✓'}</span>
+            ? <span className={text.length === 0 || text.length === 8 ? 'text-neutral-500' : 'text-amber-400'}>
+                {text.length}/8{text.length > 0 && text.length !== 8 ? ' — must be exactly 8' : text.length === 8 ? ' ✓' : ' (random ID will be used)'}
+              </span>
             : `${text.length}/${MAX_TEXT_LENGTH}`}
         </p>
       </div>
@@ -227,15 +243,18 @@ export default function WatermarkBarcodePocPage() {
       {/* Mask / use-case seed — TS only */}
       {barcodeType === 'ts' && (
         <div>
-          <label className="block text-sm font-medium mb-1">Mask / Use-case seed <span className="text-neutral-500 font-normal">(optional)</span></label>
+          <label className="block text-sm font-medium mb-1">
+            Fingerprint ID mask seed <span className="text-neutral-500 font-normal">(optional, {TS_MASK_SEED_GEN_LEN} characters)</span>
+          </label>
           <input
             className="w-full border rounded px-3 py-2 bg-transparent"
-            placeholder="e.g. BrandA, ProductLine2…"
-            value={brandSeed}
-            onChange={e => setBrandSeed(e.target.value)}
+            placeholder={`${TS_MASK_SEED_GEN_LEN} characters e.g. BrandA`}
+            maxLength={TS_MASK_SEED_GEN_LEN}
+            value={maskSeed}
+            onChange={e => setMaskSeed(e.target.value)}
           />
           <p className="text-xs text-neutral-500 mt-1">
-            Applied as a second XOR pass over the noise grid — the same fingerprint ID encoded for different brands produces completely distinct patterns. Leave blank to skip.
+            {maskSeed.length}/{TS_MASK_SEED_GEN_LEN} — applied as a second XOR pass over the noise grid. The same ID with different mask seeds produces completely distinct patterns. Leave blank to skip.
           </p>
         </div>
       )}
@@ -253,15 +272,29 @@ export default function WatermarkBarcodePocPage() {
             )}
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Shared seed (must match encoding)</label>
+            <label className="block text-sm font-medium mb-1">
+              Fingerprint ID mask seed <span className="text-neutral-500 font-normal">({TS_MASK_SEED_DEC_LEN} characters, must match encoding)</span>
+            </label>
+            <input className="w-full border rounded px-3 py-2 bg-transparent"
+              placeholder={`${TS_MASK_SEED_DEC_LEN} characters`}
+              maxLength={TS_MASK_SEED_DEC_LEN}
+              value={decodeMaskSeed} onChange={e => setDecodeMaskSeed(e.target.value)} />
+            <p className="text-xs text-neutral-500 mt-1">{decodeMaskSeed.length}/{TS_MASK_SEED_DEC_LEN}</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Watermark seed (must match encoding)</label>
             <input className="w-full border rounded px-3 py-2 bg-transparent"
               value={decodeDecodeSeed} onChange={e => setDecodeDecodeSeed(e.target.value)} />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Mask / Use-case seed <span className="text-neutral-500 font-normal">(must match encoding, leave blank if none was used)</span></label>
-            <input className="w-full border rounded px-3 py-2 bg-transparent"
-              placeholder="e.g. BrandA…"
-              value={decodeBrandSeed} onChange={e => setDecodeBrandSeed(e.target.value)} />
+            <label className="block text-sm font-medium mb-1">Watermark grid size: {tsGridSize}</label>
+            <input type="range" min={MIN_GRID_SIZE} max={MAX_GRID_SIZE} value={tsGridSize}
+              onChange={e => setTsGridSize(Number(e.target.value))} className="w-full" />
+            <p className="text-xs text-neutral-500 mt-1">Must match the value used during encoding.</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-2">Watermark coefficient pairs</label>
+            <MultiCoeffSelector layers={layers} onChange={setLayers} />
           </div>
           <button onClick={handleDecode} disabled={!decodeImage}
             className="px-4 py-2 rounded bg-black text-white disabled:opacity-50">
@@ -284,26 +317,33 @@ export default function WatermarkBarcodePocPage() {
       {/* Shared watermark params + generate button — hidden in TS decode mode */}
       {!(barcodeType === 'ts' && tsMode === 'decode') && (<>
       <div>
-        <label className="block text-sm font-medium mb-1">Seed (8 characters)</label>
-        <input className="w-full border rounded px-3 py-2 bg-transparent" value={seed} maxLength={8} onChange={e => setSeed(e.target.value)} />
-        <p className="text-xs text-neutral-500 mt-1">{seed.length}/8</p>
+        <label className="block text-sm font-medium mb-1">Watermark seed</label>
+        <input className="w-full border rounded px-3 py-2 bg-transparent" value={seed} onChange={e => setSeed(e.target.value)} />
       </div>
       <div>
         <label className="block text-sm font-medium mb-1">Strength: {strength}</label>
         <input type="range" min={MIN_STRENGTH} max={MAX_STRENGTH} value={strength} onChange={e => setStrength(Number(e.target.value))} className="w-full" />
       </div>
       <div>
-        <label className="block text-sm font-medium mb-1">Grid size: {gridSize}</label>
-        <input type="range" min={MIN_GRID_SIZE} max={MAX_GRID_SIZE} value={gridSize} onChange={e => setGridSize(Number(e.target.value))} className="w-full" />
-        <p className="text-xs text-neutral-500 mt-1">Canonical: {geo.canonicalSize}x{geo.canonicalSize}px · {geo.bitCapacity} bits</p>
+        {barcodeType === 'ts' ? (<>
+          <label className="block text-sm font-medium mb-1">Watermark grid size: {tsGridSize}</label>
+          <input type="range" min={MIN_GRID_SIZE} max={MAX_GRID_SIZE} value={tsGridSize} onChange={e => setTsGridSize(Number(e.target.value))} className="w-full" />
+          <p className="text-xs text-neutral-500 mt-1">Canonical: {tsGridSize * 8}x{tsGridSize * 8}px · {tsGridSize * tsGridSize} bits</p>
+        </>) : (<>
+          <label className="block text-sm font-medium mb-1">Watermark grid size: {gridSize}</label>
+          <input type="range" min={MIN_GRID_SIZE} max={MAX_GRID_SIZE} value={gridSize} onChange={e => setGridSize(Number(e.target.value))} className="w-full" />
+          <p className="text-xs text-neutral-500 mt-1">Canonical: {geo.canonicalSize}x{geo.canonicalSize}px · {geo.bitCapacity} bits</p>
+        </>)}
       </div>
       <div>
         <label className="block text-sm font-medium mb-2">DCT coefficient pairs</label>
         <MultiCoeffSelector layers={layers} onChange={setLayers} />
       </div>
       <div>
-        <label className="block text-sm font-medium mb-1">MM size</label>
-        <input type="number" min={1} step={0.1} className="w-full border rounded px-3 py-2 bg-transparent" value={mmSize} onChange={e => setMmSize(Number(e.target.value))} />
+        <label className="block text-sm font-medium mb-1">Barcode MM size</label>
+        <input type="number" min={1} step={0.1} className="w-full border rounded px-3 py-2 bg-transparent"
+          value={barcodeType === 'ts' ? tsMmSize : mmSize}
+          onChange={e => barcodeType === 'ts' ? setTsMmSize(Number(e.target.value)) : setMmSize(Number(e.target.value))} />
         <p className="text-xs text-neutral-500 mt-1">Physical size (mm) for the 1x PNG. 2x keeps the same mm at double the DPI.</p>
       </div>
 
