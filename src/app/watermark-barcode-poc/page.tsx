@@ -152,8 +152,8 @@ export default function WatermarkBarcodePocPage() {
         ))}
       </div>
 
-      {/* Text */}
-      <div>
+      {/* Text — hidden in TS decode mode */}
+      {!(barcodeType === 'ts' && tsMode === 'decode') && <div>
         <label className="block text-sm font-medium mb-1">
           {barcodeType === 'ts' ? 'Fingerprint ID (8 characters, optional)' : `Text (max ${MAX_TEXT_LENGTH} chars)`}
         </label>
@@ -171,7 +171,7 @@ export default function WatermarkBarcodePocPage() {
               </span>
             : `${text.length}/${MAX_TEXT_LENGTH}`}
         </p>
-      </div>
+      </div>}
 
       {/* QR-specific */}
       {barcodeType === 'qr' && (
