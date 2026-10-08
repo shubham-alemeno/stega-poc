@@ -75,7 +75,16 @@ export default function WatermarkBarcodePocPage() {
     setDecodeError(null); setDecodeResult(null);
     try {
       const result = await decodeTsMarker(decodeImage, decodeDecodeSeed, decodeMaskSeed || undefined);
-      setDecodeResult({ fingerprintId: result.fingerprintId, bitMatchPct: result.bitMatchPct });
+      const CONFIDENCE_THRESHOLD = 70;
+      if (result.bitMatchPct < CONFIDENCE_THRESHOLD) {
+        setDecodeError(
+          `Decode failed — vote confidence too low (${result.bitMatchPct}%). ` +
+          `This usually means the watermark seed or mask seed doesn't match the one used during encoding, ` +
+          `or the image has been significantly distorted.`
+        );
+      } else {
+        setDecodeResult({ fingerprintId: result.fingerprintId, bitMatchPct: result.bitMatchPct });
+      }
     } catch (e) {
       setDecodeError(e instanceof Error ? e.message : String(e));
     }
