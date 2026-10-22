@@ -52,6 +52,23 @@ export default function Home() {
           </Link>
         </div>
       </div>
+      
+      <div className="mt-12">
+        <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide mb-3">SQR</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Link
+            href="/sqr-poc"
+            className="group border border-neutral-800 rounded-lg p-6 hover:border-red-600 transition-colors"
+          >
+            <h3 className="text-lg font-semibold text-neutral-50 group-hover:text-red-400">Generate</h3>
+            <p className="text-sm text-neutral-500 mt-2 leading-relaxed">
+              Secure-QR as generated on the backend (Version 3, 29x29 modules). Counts the black and
+              white modules, watermarks only the black or only the white ones, and outputs the 2x PNG
+              plus the reference binary string. The fingerprint ID is the seed.
+            </p>
+          </Link>
+        </div>
+      </div>
     </main>
   );
 }
