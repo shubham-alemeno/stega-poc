@@ -10,6 +10,8 @@
 //     backend uses), so there are no extra dependencies.
 //   - Seed: zlib.crc32(fingerprint_id) -> mulberry32 -> one bit per module,
 //     bit = 1 when draw < 0.5 (841 draws, row-major).
+//   - Prefix and ID: the backend download view uses the prefix
+//     https://witomark.com/sqr/ and 8-character IDs (A-Z, a-z, 0-9).
 //   - Embedding: one 8x8 DCT block per module. For each coefficient pair
 //     (c1, c2): avg = (F[c1] + F[c2]) / 2, then F[c1] = avg +/- strength/2 and
 //     F[c2] = avg -/+ strength/2 (bit 1: +/-, bit 0: -/+). Orthonormal DCT-II,
@@ -25,20 +27,47 @@ export const TOTAL_BLOCKS = QR_MODULES * QR_MODULES; // 841
 export const CANONICAL_SIZE = QR_MODULES * BLOCK_SIZE; // 232
 export const DEFAULT_STRENGTH = 120;
 export const MIN_STRENGTH = 1;
-export const MAX_STRENGTH = 255;
+export const MAX_STRENGTH = 1000;
 export const DEFAULT_MM_SIZE = 10;
-export const DEFAULT_ID_LENGTH = 12;
+/** The backend builds SQR fingerprint IDs from 8 random A-Z, a-z, 0-9 characters. */
+export const DEFAULT_ID_LENGTH = 8;
+/** Prefix the backend download view puts in front of the fingerprint ID. */
+export const DEFAULT_PREFIX = 'https://witomark.com/sqr/';
 /** Version 3-M holds at most 42 bytes in byte mode. */
 export const MAX_QR_BYTES = 42;
 
 export type Coeff = [number, number];
 export type CoeffPair = [Coeff, Coeff];
 
-/** Same default pairs as the backend generator (both are embedded in every block). */
-export const DEFAULT_COEFF_PAIRS: CoeffPair[] = [
-  [[3, 1], [1, 3]],
-  [[1, 0], [0, 1]],
-];
+/** The pair the backend download view passes to the generator: bit 1 when F[3][1] > F[1][3]. */
+export const DEFAULT_COEFF_PAIRS: CoeffPair[] = [[[3, 1], [1, 3]]];
+
+/** Starting point for an optional second pair in the UI (the generator module's own second default). */
+export const DEFAULT_SECOND_PAIR: CoeffPair = [[1, 0], [0, 1]];
+
+/**
+ * Pairs are applied one after another to the same block, so every coefficient must be a valid
+ * 8x8 index, the two coefficients of a pair must differ, and no coefficient may appear in two
+ * pairs (a shared coefficient would be overwritten by the later pair and break the earlier bit).
+ */
+export function validateCoeffPairs(pairs: CoeffPair[]): void {
+  if (!pairs.length) throw new Error('Select at least one coefficient pair');
+  const seen = new Set<string>();
+  pairs.forEach((pair, i) => {
+    for (const [u, v] of pair) {
+      if (!Number.isInteger(u) || !Number.isInteger(v) || u < 0 || u > 7 || v < 0 || v > 7)
+        throw new Error(`Pair ${i + 1}: coefficient indices must be whole numbers from 0 to 7`);
+    }
+    const [a, b] = pair;
+    if (a[0] === b[0] && a[1] === b[1])
+      throw new Error(`Pair ${i + 1}: the two coefficients must be different`);
+    for (const [u, v] of pair) {
+      const key = `${u},${v}`;
+      if (seen.has(key)) throw new Error(`Coefficient (${u},${v}) is used more than once; every coefficient must be different`);
+      seen.add(key);
+    }
+  });
+}
 
 /** 'black' / 'white' watermark only that colour's modules; 'all' is the standard SQR. */
 export type WatermarkColour = 'black' | 'white' | 'all';
@@ -246,6 +275,9 @@ export interface SqrPocResult {
   /** zlib.crc32(fingerprintId): the seed passed to mulberry32. */
   seed: number;
   colour: WatermarkColour;
+  strength: number;
+  /** The coefficient pairs that were embedded (bit 1 when first > second, per pair). */
+  coeffPairs: CoeffPair[];
   counts: ModuleCounts;
   /** Modules actually watermarked (black count, white count, or total). */
   selectedCount: number;
@@ -274,8 +306,9 @@ export function generateSqrPoc(opts: SqrPocOptions): SqrPocResult {
 
   if (!fingerprintId) throw new Error('Fingerprint ID is empty');
   if (!(mmSize > 0)) throw new Error('Size in mm must be greater than 0');
-  if (!(strength >= MIN_STRENGTH && strength <= MAX_STRENGTH))
-    throw new Error(`Strength must be between ${MIN_STRENGTH} and ${MAX_STRENGTH}`);
+  if (!Number.isInteger(strength) || strength < MIN_STRENGTH || strength > MAX_STRENGTH)
+    throw new Error(`Strength must be a whole number from ${MIN_STRENGTH} to ${MAX_STRENGTH}`);
+  validateCoeffPairs(pairs);
 
   const fingerprintUrl = prefix ? `${prefix}${fingerprintId}` : fingerprintId;
   const byteLen = new TextEncoder().encode(fingerprintUrl).length;
@@ -340,6 +373,8 @@ export function generateSqrPoc(opts: SqrPocOptions): SqrPocResult {
     fingerprintUrl,
     seed,
     colour,
+    strength,
+    coeffPairs: pairs,
     counts,
     selectedCount,
     refBinaryString: refChars.join(''),
