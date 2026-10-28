@@ -66,6 +66,24 @@ export default function Home() {
               white modules, watermarks only the black or only the white ones, and outputs the 2x PNG
               plus the reference binary string. The fingerprint ID is the seed.
             </p>
+                    </Link>
+        </div>
+      </div>
+      
+      <div className="mt-12">
+        <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide mb-3">SQR + Noise</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Link
+            href="/sqr-noise-poc"
+            className="group border border-neutral-800 rounded-lg p-6 hover:border-red-600 transition-colors"
+          >
+            <h3 className="text-lg font-semibold text-neutral-50 group-hover:text-red-400">Hybrid</h3>
+            <p className="text-sm text-neutral-500 mt-2 leading-relaxed">
+              Secure-QR with a 56x56 pixel noise grid in place of the centre 7x7 modules, generated from the
+              same seed as the watermark. Only the other 792 modules are watermarked. The black pixels of the
+              noise take a gray level of your choice. Outputs the 2x grayscale PNG, the 792-bit reference string
+              and the 3136-bit noise grid.
+            </p>
           </Link>
         </div>
       </div>
