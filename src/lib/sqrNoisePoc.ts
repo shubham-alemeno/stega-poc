@@ -1,21 +1,23 @@
 // SQR + Noise hybrid POC.
 //
 // The same generation logic as the SQR POC (src/lib/sqrPoc.ts, which mirrors the backend's
-// sqr_generator.py), with two changes in the middle of the QR:
+// sqr_generator.py), with two changes:
 //
-//   1. The 7x7 modules at the centre (modules 11..17 in both directions, pixels 88..143: the
-//      place where the emblem goes) are replaced by a 56x56 pixel noise grid. The noise comes from
-//      the SAME seed as the watermark (CRC-32 of the fingerprint ID -> mulberry32): 56 x 56 = 3136
-//      bits, row-major, from draw 0. Bit 1 is a black pixel, drawn in the chosen gray level; bit 0
-//      is a white pixel (255). The gray level only affects these noise pixels, not the QR.
+//   1. A 7x7 block of modules is replaced by a 56x56 pixel noise grid. The block's top-left module
+//      is (noiseRow, noiseCol); the default is row 9, column 11 (modules 9..15 down, 11..17 across,
+//      pixels y 72..127, x 88..143). The noise comes from the SAME seed as the watermark (CRC-32 of
+//      the fingerprint ID -> mulberry32): 56 x 56 = 3136 bits, row-major, from draw 0. Bit 1 is a
+//      black pixel, drawn in the chosen gray level; bit 0 is a white pixel (255). The gray level only
+//      affects these noise pixels, not the QR.
 //
-//   2. The watermark is embedded exactly as before (one bit per 8x8 block), except that the 49
-//      centre blocks are skipped: the noise grid is never touched. 841 - 49 = 792 modules are
-//      watermarked, so the reference binary string has 792 characters instead of 841.
+//   2. The watermark is embedded exactly as before (one bit per 8x8 block), except that the 49 blocks
+//      under the noise grid are skipped: the noise is never touched. 841 - 49 = 792 modules are
+//      watermarked, so the reference binary string has 792 characters instead of 841. Moving the noise
+//      moves the skipped blocks with it.
 //
 // Everything else is unchanged: Version 3-M QR, 8 px per module (232x232), dark = 0, light = 255,
-// strength and coefficient pairs of your choice, truncation to 8 bit, 2x nearest-neighbour
-// upscale, 8-bit grayscale PNG with DPI metadata.
+// strength and coefficient pairs of your choice, truncation to 8 bit, 2x nearest-neighbour upscale,
+// 8-bit grayscale PNG with DPI metadata.
 
 import { QrDataTooLongError } from './qrV3M';
 import {
@@ -43,27 +45,134 @@ export const NOISE_MODULES = 7;
 export const NOISE_SIZE = NOISE_MODULES * BLOCK_SIZE;
 /** One binary value per noise pixel: 56 x 56 = 3136. */
 export const NOISE_BITS = NOISE_SIZE * NOISE_SIZE;
-/** First module (row and column) of the centred 7x7 block: (29 - 7) / 2 = 11. */
-export const NOISE_START_MODULE = (QR_MODULES - NOISE_MODULES) / 2;
-/** First pixel (row and column) of the noise grid: 88. */
-export const NOISE_START_PX = NOISE_START_MODULE * BLOCK_SIZE;
 export const NOISE_MODULE_COUNT = NOISE_MODULES * NOISE_MODULES; // 49
 /** Modules that can be watermarked: the red area. 841 - 49 = 792. */
 export const WATERMARKED_MODULES = TOTAL_BLOCKS - NOISE_MODULE_COUNT;
+
+/** The top-left module of the noise block can be 0..22 in each direction (22 + 7 = 29). */
+export const MAX_NOISE_POSITION = QR_MODULES - NOISE_MODULES;
+/** Default position: modules 9..15 down, 11..17 across. */
+export const DEFAULT_NOISE_ROW = 9;
+export const DEFAULT_NOISE_COL = 11;
 
 export const DEFAULT_NOISE_GRAY = 64;
 export const MIN_NOISE_GRAY = 0;
 export const MAX_NOISE_GRAY = 255;
 
-/** True when the module at (row, col) is inside the centre 7x7 block (the noise grid). */
-export function isNoiseModule(row: number, col: number): boolean {
-  return (
-    row >= NOISE_START_MODULE &&
-    row < NOISE_START_MODULE + NOISE_MODULES &&
-    col >= NOISE_START_MODULE &&
-    col < NOISE_START_MODULE + NOISE_MODULES
-  );
+/** Throws unless (row, col) is a whole-number module position that keeps the 7x7 block inside the QR. */
+export function validateNoisePosition(row: number, col: number): void {
+  for (const [name, v] of [['row', row], ['column', col]] as const) {
+    if (!Number.isInteger(v) || v < 0 || v > MAX_NOISE_POSITION)
+      throw new Error(`Noise ${name} must be a whole number from 0 to ${MAX_NOISE_POSITION} (the 7x7 block has to fit inside the 29x29 QR)`);
+  }
 }
+
+/** True when the module at (row, col) is under the 7x7 noise block whose top-left module is (noiseRow, noiseCol). */
+export function isNoiseModule(
+  row: number,
+  col: number,
+  noiseRow: number = DEFAULT_NOISE_ROW,
+  noiseCol: number = DEFAULT_NOISE_COL
+): boolean {
+  return row >= noiseRow && row < noiseRow + NOISE_MODULES && col >= noiseCol && col < noiseCol + NOISE_MODULES;
+}
+
+// ---------------------------------------------------------------------------
+// How much scan margin a position leaves
+//
+// A Version 3-M QR holds 70 codewords (44 data + 26 error correction) and corrects up to 13 wrong ones.
+// Every module under the noise can be wrong, so the number of codewords the block touches is the
+// worst-case damage. The layout below is the standard one (finder + separator, timing, the alignment
+// pattern at 22,22, format information), and the codeword order is the standard zig-zag.
+// ---------------------------------------------------------------------------
+
+export const QR_TOTAL_CODEWORDS = 70;
+export const QR_CORRECTABLE_CODEWORDS = 13;
+
+let LAYOUT: { isFunction: boolean[][]; codewordOf: number[][] } | null = null;
+
+function qrLayout(): { isFunction: boolean[][]; codewordOf: number[][] } {
+  if (LAYOUT) return LAYOUT;
+  const n = QR_MODULES;
+  const fn: boolean[][] = Array.from({ length: n }, () => new Array<boolean>(n).fill(false));
+  const mark = (x0: number, y0: number, x1: number, y1: number) => {
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) fn[y][x] = true;
+  };
+  mark(0, 0, 7, 7); // finder + separator, top left
+  mark(n - 8, 0, n - 1, 7); // top right
+  mark(0, n - 8, 7, n - 1); // bottom left
+  for (let i = 0; i < n; i++) {
+    fn[6][i] = true; // timing patterns
+    fn[i][6] = true;
+  }
+  mark(20, 20, 24, 24); // alignment pattern (Version 3: centre at 22,22)
+  for (let i = 0; i <= 8; i++) {
+    fn[8][i] = true; // format information, first copy
+    fn[i][8] = true;
+  }
+  for (let i = 0; i < 8; i++) {
+    fn[8][n - 1 - i] = true; // format information, second copy (includes the dark module at 8,21)
+    fn[n - 1 - i][8] = true;
+  }
+
+  const codewordOf: number[][] = Array.from({ length: n }, () => new Array<number>(n).fill(-1));
+  let i = 0;
+  for (let right = n - 1; right >= 1; right -= 2) {
+    const r = right <= 6 ? right - 1 : right; // skip the vertical timing column
+    for (let vert = 0; vert < n; vert++)
+      for (let j = 0; j < 2; j++) {
+        const x = r - j;
+        const upward = ((r + 1) & 2) === 0;
+        const y = upward ? n - 1 - vert : vert;
+        if (!fn[y][x] && i < QR_TOTAL_CODEWORDS * 8) {
+          codewordOf[y][x] = Math.floor(i / 8);
+          i++;
+        }
+      }
+  }
+  LAYOUT = { isFunction: fn, codewordOf };
+  return LAYOUT;
+}
+
+export interface NoiseBlockInfo {
+  /** Codewords (of 70) that have at least one module under the noise block. */
+  codewordsTouched: number;
+  /** Finder, separator, timing, alignment or format-information modules under the block. Any means the QR will not scan. */
+  functionModules: number;
+  /** How many wrong codewords a Version 3-M code corrects: 13. */
+  correctable: number;
+  /** correctable - codewordsTouched: damage the code can still absorb elsewhere (negative = cannot decode). */
+  spare: number;
+}
+
+/** Scan margin for a noise block whose top-left module is (row, col). */
+export function noiseBlockInfo(row: number, col: number): NoiseBlockInfo {
+  validateNoisePosition(row, col);
+  const { isFunction, codewordOf } = qrLayout();
+  const touched = new Set<number>();
+  let functionModules = 0;
+  for (let y = row; y < row + NOISE_MODULES; y++)
+    for (let x = col; x < col + NOISE_MODULES; x++) {
+      if (isFunction[y][x]) functionModules++;
+      else if (codewordOf[y][x] >= 0) touched.add(codewordOf[y][x]);
+    }
+  return {
+    codewordsTouched: touched.size,
+    functionModules,
+    correctable: QR_CORRECTABLE_CODEWORDS,
+    spare: QR_CORRECTABLE_CODEWORDS - touched.size,
+  };
+}
+
+/** For tests: whether a module is a function pattern, and which codeword (or -1) it belongs to. */
+export function qrModuleInfo(row: number, col: number): { isFunction: boolean; codeword: number } {
+  const { isFunction, codewordOf } = qrLayout();
+  return { isFunction: isFunction[row][col], codeword: codewordOf[row][col] };
+}
+
+// ---------------------------------------------------------------------------
+// Noise grid
+// ---------------------------------------------------------------------------
 
 /** The 3136 noise bits for a seed: the same stream as the watermark, from draw 0. */
 export function generateNoiseBits(seed: number): Uint8Array {
@@ -86,13 +195,17 @@ export interface WatermarkAreaCounts {
   noiseModules: number;
 }
 
-/** Black and white modules of the QR outside the centre 7x7 block. */
-export function countWatermarkArea(modules: boolean[][]): WatermarkAreaCounts {
+/** Black and white modules of the QR outside the noise block. */
+export function countWatermarkArea(
+  modules: boolean[][],
+  noiseRow: number = DEFAULT_NOISE_ROW,
+  noiseCol: number = DEFAULT_NOISE_COL
+): WatermarkAreaCounts {
   let black = 0;
   let white = 0;
   for (let row = 0; row < modules.length; row++)
     for (let col = 0; col < modules[row].length; col++) {
-      if (isNoiseModule(row, col)) continue;
+      if (isNoiseModule(row, col, noiseRow, noiseCol)) continue;
       if (modules[row][col]) black++;
       else white++;
     }
@@ -109,6 +222,9 @@ export interface SqrNoiseOptions {
   coeffPairs?: CoeffPair[];
   /** Gray level (0 to 255) of the black pixels of the noise grid. */
   noiseGray: number;
+  /** Top-left module of the 7x7 noise block, 0..22 each. Defaults: row 9, column 11. */
+  noiseRow?: number;
+  noiseCol?: number;
 }
 
 export interface SqrNoiseResult {
@@ -119,6 +235,11 @@ export interface SqrNoiseResult {
   strength: number;
   coeffPairs: CoeffPair[];
   noiseGray: number;
+  /** Top-left module of the noise block. */
+  noiseRow: number;
+  noiseCol: number;
+  /** Codewords the block touches and what that leaves for scanning. */
+  noiseInfo: NoiseBlockInfo;
   /** Black and white modules outside the noise grid. */
   counts: WatermarkAreaCounts;
   /** Modules actually watermarked (792 for 'all'). */
@@ -151,6 +272,8 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
   const { prefix, fingerprintId, strength, mmSize, noiseGray } = opts;
   const colour: WatermarkColour = opts.colour ?? 'all';
   const pairs = opts.coeffPairs ?? DEFAULT_COEFF_PAIRS;
+  const noiseRow = opts.noiseRow ?? DEFAULT_NOISE_ROW;
+  const noiseCol = opts.noiseCol ?? DEFAULT_NOISE_COL;
 
   if (!fingerprintId) throw new Error('Fingerprint ID is empty');
   if (!(mmSize > 0)) throw new Error('Size in mm must be greater than 0');
@@ -158,6 +281,7 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
     throw new Error(`Strength must be a whole number from ${MIN_STRENGTH} to ${MAX_STRENGTH}`);
   if (!Number.isInteger(noiseGray) || noiseGray < MIN_NOISE_GRAY || noiseGray > MAX_NOISE_GRAY)
     throw new Error(`Noise gray level must be a whole number from ${MIN_NOISE_GRAY} to ${MAX_NOISE_GRAY}`);
+  validateNoisePosition(noiseRow, noiseCol);
   validateCoeffPairs(pairs);
 
   const fingerprintUrl = prefix ? `${prefix}${fingerprintId}` : fingerprintId;
@@ -173,20 +297,22 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
     }
     throw e;
   }
-  const counts = countWatermarkArea(modules);
+  const counts = countWatermarkArea(modules, noiseRow, noiseCol);
 
   const seed = crc32(fingerprintId);
   const bits = generateMaskBits(seed, TOTAL_BLOCKS);
   const noiseBits = generateNoiseBits(seed);
   const noiseGrid = buildNoiseGrid(noiseBits, noiseGray);
 
-  // 1. The plain QR, with the centre 7x7 modules replaced by the noise grid.
+  // 1. The plain QR, with the 7x7 modules at the noise position replaced by the noise grid.
   const canonical = renderCanonical(modules);
+  const startY = noiseRow * BLOCK_SIZE;
+  const startX = noiseCol * BLOCK_SIZE;
   for (let y = 0; y < NOISE_SIZE; y++)
     for (let x = 0; x < NOISE_SIZE; x++)
-      canonical[(NOISE_START_PX + y) * CANONICAL_SIZE + (NOISE_START_PX + x)] = noiseGrid[y * NOISE_SIZE + x];
+      canonical[(startY + y) * CANONICAL_SIZE + (startX + x)] = noiseGrid[y * NOISE_SIZE + x];
 
-  // 2. Watermark the red area only. The 49 centre blocks are skipped, so the noise stays as it is.
+  // 2. Watermark the red area only. The 49 blocks under the noise are skipped, so the noise stays as it is.
   const out = Float64Array.from(canonical);
   const maskChars: string[] = [];
   const refChars: string[] = [];
@@ -196,7 +322,7 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
     const row = Math.floor(idx / QR_MODULES);
     const col = idx % QR_MODULES;
     const dark = modules[row][col];
-    const selected = !isNoiseModule(row, col) && (colour === 'all' || (colour === 'black' ? dark : !dark));
+    const selected = !isNoiseModule(row, col, noiseRow, noiseCol) && (colour === 'all' || (colour === 'black' ? dark : !dark));
     maskChars.push(selected ? '1' : '0');
     if (!selected) continue;
 
@@ -233,6 +359,9 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
     strength,
     coeffPairs: pairs,
     noiseGray,
+    noiseRow,
+    noiseCol,
+    noiseInfo: noiseBlockInfo(noiseRow, noiseCol),
     counts,
     selectedCount,
     refBinaryString: refChars.join(''),

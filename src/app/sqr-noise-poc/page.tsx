@@ -22,17 +22,23 @@ import {
   type WatermarkColour,
 } from '@/lib/sqrPoc';
 import {
+  DEFAULT_NOISE_COL,
   DEFAULT_NOISE_GRAY,
+  DEFAULT_NOISE_ROW,
   MAX_NOISE_GRAY,
+  MAX_NOISE_POSITION,
   MIN_NOISE_GRAY,
   NOISE_BITS,
   NOISE_MODULE_COUNT,
   NOISE_MODULES,
   NOISE_SIZE,
+  QR_TOTAL_CODEWORDS,
   WATERMARKED_MODULES,
   countWatermarkArea,
   generateSqrNoisePoc,
   isNoiseModule,
+  noiseBlockInfo,
+  validateNoisePosition,
   type SqrNoiseResult,
   type WatermarkAreaCounts,
 } from '@/lib/sqrNoisePoc';
@@ -85,7 +91,7 @@ function PairEditor({ title, pair, onChange }: { title: string; pair: CoeffPair;
 }
 
 /** The 29x29 module grid: red = watermarked, blue = noise grid (not touched), gray = not watermarked. */
-function ZoneMap({ mask }: { mask: string }) {
+function ZoneMap({ mask, noiseRow, noiseCol }: { mask: string; noiseRow: number; noiseCol: number }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const CELL = 12;
   const GAP = 1;
@@ -99,10 +105,10 @@ function ZoneMap({ mask }: { mask: string }) {
     ctx.fillRect(0, 0, size, size);
     for (let row = 0; row < QR_MODULES; row++)
       for (let col = 0; col < QR_MODULES; col++) {
-        ctx.fillStyle = isNoiseModule(row, col) ? '#3498db' : mask[row * QR_MODULES + col] === '1' ? '#c0392b' : '#6b7280';
+        ctx.fillStyle = isNoiseModule(row, col, noiseRow, noiseCol) ? '#3498db' : mask[row * QR_MODULES + col] === '1' ? '#c0392b' : '#6b7280';
         ctx.fillRect(GAP + col * (CELL + GAP), GAP + row * (CELL + GAP), CELL, CELL);
       }
-  }, [mask, size]);
+  }, [mask, noiseRow, noiseCol, size]);
   return <canvas ref={ref} width={size} height={size} style={{ maxWidth: '100%', height: 'auto' }} aria-label="Watermarked and noise modules" />;
 }
 
@@ -129,6 +135,8 @@ export default function SqrNoisePocPage() {
   const [strength, setStrength] = useState(DEFAULT_STRENGTH);
   const [mmSize, setMmSize] = useState(DEFAULT_MM_SIZE);
   const [noiseGray, setNoiseGray] = useState(DEFAULT_NOISE_GRAY);
+  const [noiseRow, setNoiseRow] = useState(DEFAULT_NOISE_ROW);
+  const [noiseCol, setNoiseCol] = useState(DEFAULT_NOISE_COL);
   const [pairCount, setPairCount] = useState<1 | 2>(1);
   const [pair1, setPair1] = useState<CoeffPair>(DEFAULT_COEFF_PAIRS[0]);
   const [pair2, setPair2] = useState<CoeffPair>(DEFAULT_SECOND_PAIR);
@@ -151,7 +159,7 @@ export default function SqrNoisePocPage() {
     setResult(null);
     setPngBlob(null);
     setError(null);
-  }, [prefix, fingerprintId, strength, mmSize, noiseGray, colour, pairCount, pair1, pair2]);
+  }, [prefix, fingerprintId, strength, mmSize, noiseGray, noiseRow, noiseCol, colour, pairCount, pair1, pair2]);
 
   useEffect(() => {
     if (!pngBlob) {
@@ -169,14 +177,14 @@ export default function SqrNoisePocPage() {
   const live = useMemo<{ counts: WatermarkAreaCounts | null; problem: string | null }>(() => {
     if (!fingerprintUrl) return { counts: null, problem: null };
     try {
-      return { counts: countWatermarkArea(buildQrModules(fingerprintUrl)), problem: null };
+      return { counts: countWatermarkArea(buildQrModules(fingerprintUrl), noiseRow, noiseCol), problem: null };
     } catch {
       return {
         counts: null,
         problem: 'This prefix + ID is too long for a Version 3-M QR (about 42 bytes). Shorten the prefix or the ID.',
       };
     }
-  }, [fingerprintUrl]);
+  }, [fingerprintUrl, noiseRow, noiseCol]);
 
   const seed = useMemo(() => (fingerprintId ? crc32(fingerprintId) : null), [fingerprintId]);
 
@@ -193,6 +201,15 @@ export default function SqrNoisePocPage() {
     Number.isInteger(strength) && strength >= MIN_STRENGTH && strength <= MAX_STRENGTH
       ? null
       : `Strength must be a whole number from ${MIN_STRENGTH} to ${MAX_STRENGTH}.`;
+  const positionProblem = useMemo<string | null>(() => {
+    try {
+      validateNoisePosition(noiseRow, noiseCol);
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  }, [noiseRow, noiseCol]);
+  const blockInfo = useMemo(() => (positionProblem ? null : noiseBlockInfo(noiseRow, noiseCol)), [positionProblem, noiseRow, noiseCol]);
   const grayProblem =
     Number.isInteger(noiseGray) && noiseGray >= MIN_NOISE_GRAY && noiseGray <= MAX_NOISE_GRAY
       ? null
@@ -202,7 +219,7 @@ export default function SqrNoisePocPage() {
     setError(null);
     setBusy(true);
     try {
-      const r = generateSqrNoisePoc({ prefix, fingerprintId, strength, mmSize, colour, noiseGray, coeffPairs: activePairs });
+      const r = generateSqrNoisePoc({ prefix, fingerprintId, strength, mmSize, colour, noiseGray, noiseRow, noiseCol, coeffPairs: activePairs });
       const bytes = await encodeGrayPng(r.pixels2x, r.size2x, r.dpi2x);
       setResult(r);
       setPngBlob(new Blob([new Uint8Array(bytes)], { type: 'image/png' }));
@@ -225,7 +242,7 @@ export default function SqrNoisePocPage() {
     }
   }
 
-  const baseName = `${fingerprintId}_noise`;
+  const baseName = `${fingerprintId}_noise_r${noiseRow}c${noiseCol}`;
   const pct = (n: number, t: number) => (t ? ((100 * n) / t).toFixed(1) : '0.0');
   const grayValue = Number.isInteger(noiseGray) ? Math.min(255, Math.max(0, noiseGray)) : 0;
 
@@ -241,11 +258,12 @@ export default function SqrNoisePocPage() {
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold">SQR + Noise (hybrid experiment)</h1>
         <p className="text-sm opacity-70">
-          Secure-QR (Version 3, medium ECC, 29×29 modules, 8 px per module) with the {NOISE_MODULES}×{NOISE_MODULES} modules at
-          the centre replaced by a {NOISE_SIZE}×{NOISE_SIZE} pixel noise grid ({NOISE_BITS} binary values). The noise comes
-          from the same seed as the watermark, and only its black pixels take the gray level you choose. The watermark is
-          embedded as usual, but the centre {NOISE_MODULE_COUNT} modules are skipped, so it encodes {WATERMARKED_MODULES}{' '}
-          bits instead of {TOTAL_BLOCKS}. Output: 2× grayscale PNG.
+          Secure-QR (Version 3, medium ECC, 29×29 modules, 8 px per module) with a {NOISE_MODULES}×{NOISE_MODULES} block of modules
+          replaced by a {NOISE_SIZE}×{NOISE_SIZE} pixel noise grid ({NOISE_BITS} binary values), by default at rows 9–15,
+          columns 11–17. The noise comes from the same seed as the watermark, and only its black pixels take the gray level
+          you choose. The watermark is embedded as usual, but the {NOISE_MODULE_COUNT} modules under the noise are skipped, so
+          it encodes {WATERMARKED_MODULES} bits instead of {TOTAL_BLOCKS}. Move the noise and the watermarked area moves with
+          it. Output: 2× grayscale PNG.
         </p>
       </header>
 
@@ -309,6 +327,63 @@ export default function SqrNoisePocPage() {
               {grayProblem ??
                 'The colour of the noise grid’s black pixels (its white pixels stay 255). 0 is black, 255 is white, so the noise disappears. Darker noise scans more reliably: in my tests ZXing read every gray level, while an OpenCV-based reader failed more often on small images as the gray got lighter.'}
             </span>
+          </div>
+
+          <div className="space-y-2 text-sm sm:col-span-2">
+            <span className="font-medium">
+              Noise position (top-left module of the {NOISE_MODULES}×{NOISE_MODULES} block)
+            </span>
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2">
+                <span className="opacity-60">Row</span>
+                <input
+                  type="number"
+                  className={`${inputClass} max-w-24`}
+                  min={0}
+                  max={MAX_NOISE_POSITION}
+                  value={noiseRow}
+                  onChange={(e) => setNoiseRow(Number(e.target.value))}
+                />
+              </label>
+              <label className="flex items-center gap-2">
+                <span className="opacity-60">Column</span>
+                <input
+                  type="number"
+                  className={`${inputClass} max-w-24`}
+                  min={0}
+                  max={MAX_NOISE_POSITION}
+                  value={noiseCol}
+                  onChange={(e) => setNoiseCol(Number(e.target.value))}
+                />
+              </label>
+              <button
+                type="button"
+                className={ghostButtonClass}
+                onClick={() => {
+                  setNoiseRow(DEFAULT_NOISE_ROW);
+                  setNoiseCol(DEFAULT_NOISE_COL);
+                }}
+              >
+                Reset to {DEFAULT_NOISE_ROW}, {DEFAULT_NOISE_COL}
+              </button>
+            </div>
+            <span className={`block text-xs ${positionProblem ? 'text-red-500' : 'opacity-60'}`}>
+              {positionProblem ??
+                `Module rows ${noiseRow}–${noiseRow + NOISE_MODULES - 1}, columns ${noiseCol}–${noiseCol + NOISE_MODULES - 1} (pixels y ${noiseRow * 8}–${noiseRow * 8 + NOISE_SIZE - 1}, x ${noiseCol * 8}–${noiseCol * 8 + NOISE_SIZE - 1}). Rows and columns are counted from 0 at the top left; 0 to ${MAX_NOISE_POSITION} keeps the block inside the QR. The ${NOISE_MODULE_COUNT} modules under it are not watermarked, so the watermarked area moves with the noise.`}
+            </span>
+            {blockInfo &&
+              (blockInfo.functionModules > 0 ? (
+                <span className="block text-xs text-red-500">
+                  This block covers {blockInfo.functionModules} finder, timing, alignment or format-information module
+                  {blockInfo.functionModules === 1 ? '' : 's'}, so the QR will not scan. Move it.
+                </span>
+              ) : (
+                <span className={`block text-xs ${blockInfo.spare <= 1 ? 'text-amber-500' : blockInfo.spare >= 4 ? 'text-green-500' : 'opacity-80'}`}>
+                  Scan margin: the noise touches {blockInfo.codewordsTouched} of the QR&apos;s {QR_TOTAL_CODEWORDS} codewords, and a
+                  Version 3-M code corrects up to {blockInfo.correctable}. That leaves {blockInfo.spare} to spare for blur or print
+                  damage. (For reference, the exact centre, row 11 column 11, touches 12.)
+                </span>
+              ))}
           </div>
 
           <label className="space-y-1 text-sm">
@@ -423,8 +498,8 @@ export default function SqrNoisePocPage() {
             </table>
           )}
           <p className="text-xs opacity-60">
-            The centre {NOISE_MODULES}×{NOISE_MODULES} block ({NOISE_MODULE_COUNT} modules, {NOISE_SIZE}×{NOISE_SIZE} px) is the noise grid and is
-            left out of these counts.
+            The {NOISE_MODULES}×{NOISE_MODULES} noise block ({NOISE_MODULE_COUNT} modules, {NOISE_SIZE}×{NOISE_SIZE} px) is left out of these
+            counts.
           </p>
         </div>
 
@@ -433,7 +508,7 @@ export default function SqrNoisePocPage() {
             type="button"
             className={buttonClass}
             onClick={handleGenerate}
-            disabled={busy || !fingerprintId || !!live.problem || !!strengthProblem || !!pairsProblem || !!grayProblem}
+            disabled={busy || !fingerprintId || !!live.problem || !!strengthProblem || !!pairsProblem || !!grayProblem || !!positionProblem}
           >
             {busy ? 'Generating…' : 'Generate'}
           </button>
@@ -469,6 +544,13 @@ export default function SqrNoisePocPage() {
               <div className="flex gap-2"><dt className="w-44 opacity-60">Seed (CRC-32 of ID)</dt><dd className="font-mono">{result.seed}</dd></div>
               <div className="flex gap-2"><dt className="w-44 opacity-60">Watermarked</dt><dd>{result.selectedCount} modules ({COLOUR_LABELS[result.colour].toLowerCase()}) of {TOTAL_BLOCKS}; the {NOISE_MODULE_COUNT} noise modules are skipped</dd></div>
               <div className="flex gap-2"><dt className="w-44 opacity-60">Noise grid</dt><dd>{NOISE_SIZE}×{NOISE_SIZE} px, {NOISE_BITS} bits, {result.noiseBlackPixels} black pixels</dd></div>
+              <div className="flex gap-2">
+                <dt className="w-44 opacity-60">Noise position</dt>
+                <dd>
+                  modules rows {result.noiseRow}–{result.noiseRow + NOISE_MODULES - 1}, columns {result.noiseCol}–{result.noiseCol + NOISE_MODULES - 1}; touches{' '}
+                  {result.noiseInfo.codewordsTouched} of {QR_TOTAL_CODEWORDS} codewords ({result.noiseInfo.spare} to spare)
+                </dd>
+              </div>
               <div className="flex gap-2"><dt className="w-44 opacity-60">Noise gray level</dt><dd>{result.noiseGray} (black pixels); white pixels 255</dd></div>
               <div className="flex gap-2"><dt className="w-44 opacity-60">Strength</dt><dd>{result.strength}</dd></div>
               <div className="flex gap-2">
@@ -533,7 +615,7 @@ export default function SqrNoisePocPage() {
             <summary className="cursor-pointer font-medium">Watermark map, module mask and the full {TOTAL_BLOCKS}-bit string</summary>
             <div className="space-y-3 pt-2">
               <div className="space-y-2">
-                <ZoneMap mask={result.maskString} />
+                <ZoneMap mask={result.maskString} noiseRow={result.noiseRow} noiseCol={result.noiseCol} />
                 <p className="text-xs opacity-60">
                   <span className="inline-block h-3 w-3 align-middle" style={{ backgroundColor: '#c0392b' }} /> watermarked ·{' '}
                   <span className="inline-block h-3 w-3 align-middle" style={{ backgroundColor: '#3498db' }} /> noise grid, not
