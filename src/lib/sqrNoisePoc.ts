@@ -8,8 +8,12 @@
 //      pixels y 72..127, x 88..143). The noise comes from the SAME seed as the watermark (CRC-32 of
 //      the fingerprint ID -> mulberry32), row-major, from draw 0. Bit 1 is a black pixel, drawn in the
 //      chosen gray level; bit 0 is a white pixel (255). The gray level only affects these noise pixels,
-//      not the QR. The grid is 56 x 56 (3136 binary values, one per pixel) or 28 x 28 (784 binary
-//      values, each filling a 2 x 2 pixel cell); either way it fills the same 56 x 56 pixel block.
+//      not the QR. The grid is 56 x 56 (3136 binary values, the default), 28 x 28 (784 values) or
+//      112 x 112 (12544 values); whichever it is, it fills the same block: 56 x 56 px at 1x and
+//      112 x 112 px in the 2x PNG. A value is therefore 4 x 4 px (28 grid), 2 x 2 px (56 grid) or a
+//      single pixel (112 grid) in the 2x PNG. The 112 grid needs half-pixel cells at 1x, so the noise is
+//      composed at 2x resolution after the image is upscaled (for the 28 and 56 grids this gives exactly
+//      the same pixels as before).
 //
 //   2. The watermark is embedded exactly as before (one bit per 8x8 block), except that the 49 blocks
 //      under the noise grid are skipped: the noise is never touched. 841 - 49 = 792 modules are
@@ -56,8 +60,10 @@ export const MAX_NOISE_POSITION = QR_MODULES - NOISE_MODULES;
 export const DEFAULT_NOISE_ROW = 9;
 export const DEFAULT_NOISE_COL = 11;
 
-/** The noise grid resolution: 56 x 56 values (1 px each) or 28 x 28 values (2 x 2 px each). */
-export const NOISE_GRID_SIZES = [56, 28] as const;
+/** The noise grid resolution: 28 x 28 (4 x 4 px per value in the 2x PNG), 56 x 56 (2 x 2 px) or 112 x 112 (1 px). */
+/** The block in the 2x PNG: 112 x 112 px. */
+export const NOISE_SIZE_2X = NOISE_SIZE * 2;
+export const NOISE_GRID_SIZES = [28, 56, 112] as const;
 export type NoiseGridSize = (typeof NOISE_GRID_SIZES)[number];
 export const DEFAULT_NOISE_GRID_SIZE: NoiseGridSize = 56;
 
@@ -69,7 +75,9 @@ export function noiseBitCount(gridSize: number): number {
 /** Throws unless the noise grid size is 56 or 28. */
 export function validateNoiseGridSize(gridSize: number): void {
   if (!(NOISE_GRID_SIZES as readonly number[]).includes(gridSize))
-    throw new Error(`Noise grid must be ${NOISE_GRID_SIZES.join(' or ')} (values per side)`);
+    throw new Error(
+      `Noise grid must be ${NOISE_GRID_SIZES.slice(0, -1).join(', ')} or ${NOISE_GRID_SIZES[NOISE_GRID_SIZES.length - 1]} (values per side)`
+    );
 }
 
 export const DEFAULT_NOISE_GRAY = 64;
@@ -197,15 +205,32 @@ export function generateNoiseBits(seed: number, gridSize: number = NOISE_SIZE): 
 }
 
 /**
- * The 56x56 pixel block, row-major. `bits` holds gridSize x gridSize values, row-major; each value fills a
- * (56 / gridSize) square of pixels: bit 1 becomes black pixels drawn in `gray`, bit 0 white pixels (255).
+ * The 112x112 pixel block as it appears in the 2x PNG, row-major. `bits` holds gridSize x gridSize values,
+ * row-major; each value fills a (112 / gridSize) square of pixels: bit 1 becomes black pixels drawn in `gray`,
+ * bit 0 white pixels (255).
+ */
+export function buildNoiseGrid2x(bits: Uint8Array, gray: number, gridSize: number = NOISE_SIZE): Uint8Array {
+  const cell = NOISE_SIZE_2X / gridSize;
+  const grid = new Uint8Array(NOISE_SIZE_2X * NOISE_SIZE_2X);
+  for (let y = 0; y < NOISE_SIZE_2X; y++)
+    for (let x = 0; x < NOISE_SIZE_2X; x++)
+      grid[y * NOISE_SIZE_2X + x] = bits[Math.floor(y / cell) * gridSize + Math.floor(x / cell)] === 1 ? gray : 255;
+  return grid;
+}
+
+/**
+ * The 56x56 pixel block at 1x, row-major: each pixel is the average of the 2x2 pixels of the 2x block,
+ * truncated. For the 28 and 56 grids every 2x2 group is one value, so this is exact. For the 112 grid
+ * it is the closest 1x picture; the exact noise is in the 2x PNG.
  */
 export function buildNoiseGrid(bits: Uint8Array, gray: number, gridSize: number = NOISE_SIZE): Uint8Array {
-  const cell = NOISE_SIZE / gridSize;
+  const big = buildNoiseGrid2x(bits, gray, gridSize);
   const grid = new Uint8Array(NOISE_BITS);
   for (let y = 0; y < NOISE_SIZE; y++)
-    for (let x = 0; x < NOISE_SIZE; x++)
-      grid[y * NOISE_SIZE + x] = bits[Math.floor(y / cell) * gridSize + Math.floor(x / cell)] === 1 ? gray : 255;
+    for (let x = 0; x < NOISE_SIZE; x++) {
+      const i = 2 * y * NOISE_SIZE_2X + 2 * x;
+      grid[y * NOISE_SIZE + x] = Math.floor((big[i] + big[i + 1] + big[i + NOISE_SIZE_2X] + big[i + NOISE_SIZE_2X + 1]) / 4);
+    }
   return grid;
 }
 
@@ -248,7 +273,7 @@ export interface SqrNoiseOptions {
   /** Top-left module of the 7x7 noise block, 0..22 each. Defaults: row 9, column 11. */
   noiseRow?: number;
   noiseCol?: number;
-  /** Noise grid resolution: 56 (default, 3136 values, 1 px each) or 28 (784 values, 2 x 2 px each). */
+  /** Noise grid resolution: 56 (default, 3136 values), 28 (784 values) or 112 (12544 values). */
   noiseGridSize?: NoiseGridSize;
 }
 
@@ -263,10 +288,10 @@ export interface SqrNoiseResult {
   /** Top-left module of the noise block. */
   noiseRow: number;
   noiseCol: number;
-  /** Noise grid resolution: values per side (56 or 28). */
+  /** Noise grid resolution: values per side (28, 56 or 112). */
   noiseGridSize: NoiseGridSize;
-  /** Pixels per noise value, per side: 1 for the 56 grid, 2 for the 28 grid. */
-  noiseCellPx: number;
+  /** Pixels per noise value, per side, in the 2x PNG: 4 for the 28 grid, 2 for the 56 grid, 1 for the 112 grid. */
+  noiseCell2xPx: number;
   /** Codewords the block touches and what that leaves for scanning. */
   noiseInfo: NoiseBlockInfo;
   /** Black and white modules outside the noise grid. */
@@ -283,15 +308,15 @@ export interface SqrNoiseResult {
   fullBinaryString: string;
   /** 841 chars, '1' where the module was watermarked. */
   maskString: string;
-  /** The noise grid's binary values, row-major (1 = black): 3136 chars for the 56 grid, 784 for the 28 grid. */
+  /** The noise grid's binary values, row-major (1 = black): 784 chars for the 28 grid, 3136 for the 56 grid, 12544 for the 112 grid. */
   noiseBitsString: string;
   /** Noise values that are 1 (black). */
   noiseBlackCells: number;
-  /** Black pixels in the 56x56 block: noiseBlackCells x noiseCellPx squared. */
+  /** Black pixels in the 112x112 block of the 2x PNG: noiseBlackCells x noiseCell2xPx squared. */
   noiseBlackPixels: number;
   /** 232x232 8-bit grayscale pixels (1x). */
   pixels1x: Uint8Array;
-  /** 464x464 8-bit grayscale pixels (2x, nearest neighbour). */
+  /** 464x464 8-bit grayscale pixels (2x): the 1x image upscaled, with the noise block at full 2x resolution. */
   pixels2x: Uint8Array;
   size1x: number;
   size2x: number;
@@ -336,7 +361,8 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
   const bits = generateMaskBits(seed, TOTAL_BLOCKS);
   const noiseBits = generateNoiseBits(seed, noiseGridSize);
   const noiseGrid = buildNoiseGrid(noiseBits, noiseGray, noiseGridSize);
-  const noiseCellPx = NOISE_SIZE / noiseGridSize;
+  const noiseGrid2x = buildNoiseGrid2x(noiseBits, noiseGray, noiseGridSize);
+  const noiseCell2xPx = NOISE_SIZE_2X / noiseGridSize;
   const noiseBlackCells = noiseBits.reduce((n, b) => n + b, 0);
 
   // 1. The plain QR, with the 7x7 modules at the noise position replaced by the noise grid.
@@ -384,6 +410,11 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
     const sy = y >> 1;
     for (let x = 0; x < size2x; x++) pixels2x[y * size2x + x] = pixels1x[sy * CANONICAL_SIZE + (x >> 1)];
   }
+  // The noise block at full 2x resolution (identical to the upscale for the 28 and 56 grids; needed for the 112 grid).
+  const startY2 = noiseRow * BLOCK_SIZE * 2;
+  const startX2 = noiseCol * BLOCK_SIZE * 2;
+  for (let y = 0; y < NOISE_SIZE_2X; y++)
+    for (let x = 0; x < NOISE_SIZE_2X; x++) pixels2x[(startY2 + y) * size2x + (startX2 + x)] = noiseGrid2x[y * NOISE_SIZE_2X + x];
 
   const baseDpi = Math.round((CANONICAL_SIZE / mmSize) * 25.4);
 
@@ -397,7 +428,7 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
     noiseRow,
     noiseCol,
     noiseGridSize,
-    noiseCellPx,
+    noiseCell2xPx,
     noiseInfo: noiseBlockInfo(noiseRow, noiseCol),
     counts,
     selectedCount,
@@ -406,7 +437,7 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
     maskString: maskChars.join(''),
     noiseBitsString: Array.from(noiseBits).join(''),
     noiseBlackCells,
-    noiseBlackPixels: noiseBlackCells * noiseCellPx * noiseCellPx,
+    noiseBlackPixels: noiseBlackCells * noiseCell2xPx * noiseCell2xPx,
     pixels1x,
     pixels2x,
     size1x: CANONICAL_SIZE,
