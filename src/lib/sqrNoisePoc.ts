@@ -6,9 +6,10 @@
 //   1. A 7x7 block of modules is replaced by a 56x56 pixel noise grid. The block's top-left module
 //      is (noiseRow, noiseCol); the default is row 9, column 11 (modules 9..15 down, 11..17 across,
 //      pixels y 72..127, x 88..143). The noise comes from the SAME seed as the watermark (CRC-32 of
-//      the fingerprint ID -> mulberry32): 56 x 56 = 3136 bits, row-major, from draw 0. Bit 1 is a
-//      black pixel, drawn in the chosen gray level; bit 0 is a white pixel (255). The gray level only
-//      affects these noise pixels, not the QR.
+//      the fingerprint ID -> mulberry32), row-major, from draw 0. Bit 1 is a black pixel, drawn in the
+//      chosen gray level; bit 0 is a white pixel (255). The gray level only affects these noise pixels,
+//      not the QR. The grid is 56 x 56 (3136 binary values, one per pixel) or 28 x 28 (784 binary
+//      values, each filling a 2 x 2 pixel cell); either way it fills the same 56 x 56 pixel block.
 //
 //   2. The watermark is embedded exactly as before (one bit per 8x8 block), except that the 49 blocks
 //      under the noise grid are skipped: the noise is never touched. 841 - 49 = 792 modules are
@@ -54,6 +55,22 @@ export const MAX_NOISE_POSITION = QR_MODULES - NOISE_MODULES;
 /** Default position: modules 9..15 down, 11..17 across. */
 export const DEFAULT_NOISE_ROW = 9;
 export const DEFAULT_NOISE_COL = 11;
+
+/** The noise grid resolution: 56 x 56 values (1 px each) or 28 x 28 values (2 x 2 px each). */
+export const NOISE_GRID_SIZES = [56, 28] as const;
+export type NoiseGridSize = (typeof NOISE_GRID_SIZES)[number];
+export const DEFAULT_NOISE_GRID_SIZE: NoiseGridSize = 56;
+
+/** Binary values in a noise grid of the given size: 3136 for 56, 784 for 28. */
+export function noiseBitCount(gridSize: number): number {
+  return gridSize * gridSize;
+}
+
+/** Throws unless the noise grid size is 56 or 28. */
+export function validateNoiseGridSize(gridSize: number): void {
+  if (!(NOISE_GRID_SIZES as readonly number[]).includes(gridSize))
+    throw new Error(`Noise grid must be ${NOISE_GRID_SIZES.join(' or ')} (values per side)`);
+}
 
 export const DEFAULT_NOISE_GRAY = 64;
 export const MIN_NOISE_GRAY = 0;
@@ -174,15 +191,21 @@ export function qrModuleInfo(row: number, col: number): { isFunction: boolean; c
 // Noise grid
 // ---------------------------------------------------------------------------
 
-/** The 3136 noise bits for a seed: the same stream as the watermark, from draw 0. */
-export function generateNoiseBits(seed: number): Uint8Array {
-  return generateMaskBits(seed, NOISE_BITS);
+/** The noise bits for a seed (gridSize x gridSize of them): the same stream as the watermark, from draw 0. */
+export function generateNoiseBits(seed: number, gridSize: number = NOISE_SIZE): Uint8Array {
+  return generateMaskBits(seed, noiseBitCount(gridSize));
 }
 
-/** 56x56 pixels, row-major: bit 1 becomes a black pixel drawn in `gray`, bit 0 a white pixel. */
-export function buildNoiseGrid(bits: Uint8Array, gray: number): Uint8Array {
+/**
+ * The 56x56 pixel block, row-major. `bits` holds gridSize x gridSize values, row-major; each value fills a
+ * (56 / gridSize) square of pixels: bit 1 becomes black pixels drawn in `gray`, bit 0 white pixels (255).
+ */
+export function buildNoiseGrid(bits: Uint8Array, gray: number, gridSize: number = NOISE_SIZE): Uint8Array {
+  const cell = NOISE_SIZE / gridSize;
   const grid = new Uint8Array(NOISE_BITS);
-  for (let i = 0; i < NOISE_BITS; i++) grid[i] = bits[i] === 1 ? gray : 255;
+  for (let y = 0; y < NOISE_SIZE; y++)
+    for (let x = 0; x < NOISE_SIZE; x++)
+      grid[y * NOISE_SIZE + x] = bits[Math.floor(y / cell) * gridSize + Math.floor(x / cell)] === 1 ? gray : 255;
   return grid;
 }
 
@@ -225,6 +248,8 @@ export interface SqrNoiseOptions {
   /** Top-left module of the 7x7 noise block, 0..22 each. Defaults: row 9, column 11. */
   noiseRow?: number;
   noiseCol?: number;
+  /** Noise grid resolution: 56 (default, 3136 values, 1 px each) or 28 (784 values, 2 x 2 px each). */
+  noiseGridSize?: NoiseGridSize;
 }
 
 export interface SqrNoiseResult {
@@ -238,6 +263,10 @@ export interface SqrNoiseResult {
   /** Top-left module of the noise block. */
   noiseRow: number;
   noiseCol: number;
+  /** Noise grid resolution: values per side (56 or 28). */
+  noiseGridSize: NoiseGridSize;
+  /** Pixels per noise value, per side: 1 for the 56 grid, 2 for the 28 grid. */
+  noiseCellPx: number;
   /** Codewords the block touches and what that leaves for scanning. */
   noiseInfo: NoiseBlockInfo;
   /** Black and white modules outside the noise grid. */
@@ -254,9 +283,11 @@ export interface SqrNoiseResult {
   fullBinaryString: string;
   /** 841 chars, '1' where the module was watermarked. */
   maskString: string;
-  /** 3136 chars: the noise grid's binary values, row-major (1 = black pixel). */
+  /** The noise grid's binary values, row-major (1 = black): 3136 chars for the 56 grid, 784 for the 28 grid. */
   noiseBitsString: string;
-  /** Black pixels in the noise grid. */
+  /** Noise values that are 1 (black). */
+  noiseBlackCells: number;
+  /** Black pixels in the 56x56 block: noiseBlackCells x noiseCellPx squared. */
   noiseBlackPixels: number;
   /** 232x232 8-bit grayscale pixels (1x). */
   pixels1x: Uint8Array;
@@ -274,6 +305,7 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
   const pairs = opts.coeffPairs ?? DEFAULT_COEFF_PAIRS;
   const noiseRow = opts.noiseRow ?? DEFAULT_NOISE_ROW;
   const noiseCol = opts.noiseCol ?? DEFAULT_NOISE_COL;
+  const noiseGridSize: NoiseGridSize = opts.noiseGridSize ?? DEFAULT_NOISE_GRID_SIZE;
 
   if (!fingerprintId) throw new Error('Fingerprint ID is empty');
   if (!(mmSize > 0)) throw new Error('Size in mm must be greater than 0');
@@ -282,6 +314,7 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
   if (!Number.isInteger(noiseGray) || noiseGray < MIN_NOISE_GRAY || noiseGray > MAX_NOISE_GRAY)
     throw new Error(`Noise gray level must be a whole number from ${MIN_NOISE_GRAY} to ${MAX_NOISE_GRAY}`);
   validateNoisePosition(noiseRow, noiseCol);
+  validateNoiseGridSize(noiseGridSize);
   validateCoeffPairs(pairs);
 
   const fingerprintUrl = prefix ? `${prefix}${fingerprintId}` : fingerprintId;
@@ -301,8 +334,10 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
 
   const seed = crc32(fingerprintId);
   const bits = generateMaskBits(seed, TOTAL_BLOCKS);
-  const noiseBits = generateNoiseBits(seed);
-  const noiseGrid = buildNoiseGrid(noiseBits, noiseGray);
+  const noiseBits = generateNoiseBits(seed, noiseGridSize);
+  const noiseGrid = buildNoiseGrid(noiseBits, noiseGray, noiseGridSize);
+  const noiseCellPx = NOISE_SIZE / noiseGridSize;
+  const noiseBlackCells = noiseBits.reduce((n, b) => n + b, 0);
 
   // 1. The plain QR, with the 7x7 modules at the noise position replaced by the noise grid.
   const canonical = renderCanonical(modules);
@@ -361,6 +396,8 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
     noiseGray,
     noiseRow,
     noiseCol,
+    noiseGridSize,
+    noiseCellPx,
     noiseInfo: noiseBlockInfo(noiseRow, noiseCol),
     counts,
     selectedCount,
@@ -368,7 +405,8 @@ export function generateSqrNoisePoc(opts: SqrNoiseOptions): SqrNoiseResult {
     fullBinaryString: Array.from(bits).join(''),
     maskString: maskChars.join(''),
     noiseBitsString: Array.from(noiseBits).join(''),
-    noiseBlackPixels: noiseBits.reduce((n, b) => n + b, 0),
+    noiseBlackCells,
+    noiseBlackPixels: noiseBlackCells * noiseCellPx * noiseCellPx,
     pixels1x,
     pixels2x,
     size1x: CANONICAL_SIZE,

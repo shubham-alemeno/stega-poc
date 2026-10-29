@@ -23,12 +23,14 @@ import {
 } from '@/lib/sqrPoc';
 import {
   DEFAULT_NOISE_COL,
+  DEFAULT_NOISE_GRID_SIZE,
   DEFAULT_NOISE_GRAY,
   DEFAULT_NOISE_ROW,
   MAX_NOISE_GRAY,
   MAX_NOISE_POSITION,
   MIN_NOISE_GRAY,
   NOISE_BITS,
+  NOISE_GRID_SIZES,
   NOISE_MODULE_COUNT,
   NOISE_MODULES,
   NOISE_SIZE,
@@ -37,8 +39,10 @@ import {
   countWatermarkArea,
   generateSqrNoisePoc,
   isNoiseModule,
+  noiseBitCount,
   noiseBlockInfo,
   validateNoisePosition,
+  type NoiseGridSize,
   type SqrNoiseResult,
   type WatermarkAreaCounts,
 } from '@/lib/sqrNoisePoc';
@@ -137,6 +141,7 @@ export default function SqrNoisePocPage() {
   const [noiseGray, setNoiseGray] = useState(DEFAULT_NOISE_GRAY);
   const [noiseRow, setNoiseRow] = useState(DEFAULT_NOISE_ROW);
   const [noiseCol, setNoiseCol] = useState(DEFAULT_NOISE_COL);
+  const [noiseGridSize, setNoiseGridSize] = useState<NoiseGridSize>(DEFAULT_NOISE_GRID_SIZE);
   const [pairCount, setPairCount] = useState<1 | 2>(1);
   const [pair1, setPair1] = useState<CoeffPair>(DEFAULT_COEFF_PAIRS[0]);
   const [pair2, setPair2] = useState<CoeffPair>(DEFAULT_SECOND_PAIR);
@@ -159,7 +164,7 @@ export default function SqrNoisePocPage() {
     setResult(null);
     setPngBlob(null);
     setError(null);
-  }, [prefix, fingerprintId, strength, mmSize, noiseGray, noiseRow, noiseCol, colour, pairCount, pair1, pair2]);
+  }, [prefix, fingerprintId, strength, mmSize, noiseGray, noiseRow, noiseCol, noiseGridSize, colour, pairCount, pair1, pair2]);
 
   useEffect(() => {
     if (!pngBlob) {
@@ -219,7 +224,7 @@ export default function SqrNoisePocPage() {
     setError(null);
     setBusy(true);
     try {
-      const r = generateSqrNoisePoc({ prefix, fingerprintId, strength, mmSize, colour, noiseGray, noiseRow, noiseCol, coeffPairs: activePairs });
+      const r = generateSqrNoisePoc({ prefix, fingerprintId, strength, mmSize, colour, noiseGray, noiseRow, noiseCol, noiseGridSize, coeffPairs: activePairs });
       const bytes = await encodeGrayPng(r.pixels2x, r.size2x, r.dpi2x);
       setResult(r);
       setPngBlob(new Blob([new Uint8Array(bytes)], { type: 'image/png' }));
@@ -242,7 +247,7 @@ export default function SqrNoisePocPage() {
     }
   }
 
-  const baseName = `${fingerprintId}_noise_r${noiseRow}c${noiseCol}`;
+  const baseName = `${fingerprintId}_noise${noiseGridSize === 28 ? '28' : ''}_r${noiseRow}c${noiseCol}`;
   const pct = (n: number, t: number) => (t ? ((100 * n) / t).toFixed(1) : '0.0');
   const grayValue = Number.isInteger(noiseGray) ? Math.min(255, Math.max(0, noiseGray)) : 0;
 
@@ -259,8 +264,8 @@ export default function SqrNoisePocPage() {
         <h1 className="text-2xl font-semibold">SQR + Noise (hybrid experiment)</h1>
         <p className="text-sm opacity-70">
           Secure-QR (Version 3, medium ECC, 29×29 modules, 8 px per module) with a {NOISE_MODULES}×{NOISE_MODULES} block of modules
-          replaced by a {NOISE_SIZE}×{NOISE_SIZE} pixel noise grid ({NOISE_BITS} binary values), by default at rows 9–15,
-          columns 11–17. The noise comes from the same seed as the watermark, and only its black pixels take the gray level
+          replaced by a {NOISE_SIZE}×{NOISE_SIZE} pixel block of noise (a {NOISE_SIZE}×{NOISE_SIZE} grid of {NOISE_BITS} binary values, or
+          a coarser 28×28 grid of 784), by default at rows 9–15, columns 11–17. The noise comes from the same seed as the watermark, and only its black pixels take the gray level
           you choose. The watermark is embedded as usual, but the {NOISE_MODULE_COUNT} modules under the noise are skipped, so
           it encodes {WATERMARKED_MODULES} bits instead of {TOTAL_BLOCKS}. Move the noise and the watermarked area moves with
           it. Output: 2× grayscale PNG.
@@ -326,6 +331,29 @@ export default function SqrNoisePocPage() {
             <span className={`block text-xs ${grayProblem ? 'text-red-500' : 'opacity-60'}`}>
               {grayProblem ??
                 'The colour of the noise grid’s black pixels (its white pixels stay 255). 0 is black, 255 is white, so the noise disappears. Darker noise scans more reliably: in my tests ZXing read every gray level, while an OpenCV-based reader failed more often on small images as the gray got lighter.'}
+            </span>
+          </div>
+
+          <div className="space-y-1 text-sm sm:col-span-2">
+            <span className="font-medium">Noise grid</span>
+            <div role="radiogroup" aria-label="Noise grid resolution" className="flex flex-wrap overflow-hidden rounded border border-gray-400/60 sm:inline-flex">
+              {NOISE_GRID_SIZES.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  role="radio"
+                  aria-checked={noiseGridSize === n}
+                  onClick={() => setNoiseGridSize(n)}
+                  className={`px-5 py-2 text-sm ${noiseGridSize === n ? 'bg-blue-600 text-white' : 'hover:bg-gray-500/10'}`}
+                >
+                  {n}×{n} grid ({noiseBitCount(n)} values, {NOISE_SIZE / n}×{NOISE_SIZE / n} px each)
+                </button>
+              ))}
+            </div>
+            <span className="block text-xs opacity-60">
+              Both fill the same {NOISE_SIZE}×{NOISE_SIZE} pixel block ({NOISE_MODULES}×{NOISE_MODULES} modules). The 28×28 grid is coarser: each
+              of its 784 values is drawn as a 2×2 pixel cell. The values come from the same seed and stream (draw 0 onwards). Nothing else
+              changes: same position, same {WATERMARKED_MODULES} watermarked modules, same reference string. In my tests both scanned equally well.
             </span>
           </div>
 
@@ -543,7 +571,11 @@ export default function SqrNoisePocPage() {
               <div className="flex gap-2"><dt className="w-44 opacity-60">QR content</dt><dd className="break-all font-mono">{result.fingerprintUrl}</dd></div>
               <div className="flex gap-2"><dt className="w-44 opacity-60">Seed (CRC-32 of ID)</dt><dd className="font-mono">{result.seed}</dd></div>
               <div className="flex gap-2"><dt className="w-44 opacity-60">Watermarked</dt><dd>{result.selectedCount} modules ({COLOUR_LABELS[result.colour].toLowerCase()}) of {TOTAL_BLOCKS}; the {NOISE_MODULE_COUNT} noise modules are skipped</dd></div>
-              <div className="flex gap-2"><dt className="w-44 opacity-60">Noise grid</dt><dd>{NOISE_SIZE}×{NOISE_SIZE} px, {NOISE_BITS} bits, {result.noiseBlackPixels} black pixels</dd></div>
+              <div className="flex gap-2"><dt className="w-44 opacity-60">Noise grid</dt><dd>
+                  {result.noiseGridSize}×{result.noiseGridSize} grid, {result.noiseBitsString.length} binary values
+                  {result.noiseCellPx > 1 ? `, each a ${result.noiseCellPx}×${result.noiseCellPx} px cell` : ' (1 px each)'}, filling the {NOISE_SIZE}×{NOISE_SIZE} px block;{' '}
+                  {result.noiseBlackCells} black values ({result.noiseBlackPixels} black pixels)
+                </dd></div>
               <div className="flex gap-2">
                 <dt className="w-44 opacity-60">Noise position</dt>
                 <dd>
@@ -605,9 +637,10 @@ export default function SqrNoisePocPage() {
             </div>
             <textarea readOnly rows={6} value={result.noiseBitsString} className={`${inputClass} font-mono text-xs`} />
             <p className="text-xs opacity-60">
-              {NOISE_SIZE} rows of {NOISE_SIZE} values, row-major, from the same seed as the watermark (draw 0 onwards). 1 is a black
-              pixel (drawn in the chosen gray), 0 is a white pixel. Its first {WATERMARKED_MODULES} values are the same bits as the
-              start of the standard {TOTAL_BLOCKS}-bit string, because both come from the same stream.
+              {result.noiseGridSize} rows of {result.noiseGridSize} values, row-major, from the same seed as the watermark (draw 0 onwards). 1 is black
+              {result.noiseCellPx > 1 ? ` (a ${result.noiseCellPx}×${result.noiseCellPx} px cell)` : ' (a pixel)'}, drawn in the chosen gray; 0 is white. Its first{' '}
+              {Math.min(result.noiseBitsString.length, TOTAL_BLOCKS)} values are the same bits as the start of the standard {TOTAL_BLOCKS}-bit string,
+              because both come from the same stream.
             </p>
           </div>
 

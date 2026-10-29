@@ -14,9 +14,9 @@ import {
   buildQrModules, crc32, encodeGrayPng, generateSqrPoc, type CoeffPair, type WatermarkColour,
 } from '../src/lib/sqrPoc';
 import {
-  DEFAULT_NOISE_COL, DEFAULT_NOISE_ROW, MAX_NOISE_POSITION, NOISE_BITS, NOISE_MODULE_COUNT, NOISE_SIZE, QR_CORRECTABLE_CODEWORDS,
+  DEFAULT_NOISE_COL, DEFAULT_NOISE_GRID_SIZE, DEFAULT_NOISE_ROW, MAX_NOISE_POSITION, NOISE_GRID_SIZES, NOISE_BITS, NOISE_MODULE_COUNT, NOISE_SIZE, QR_CORRECTABLE_CODEWORDS,
   QR_TOTAL_CODEWORDS, WATERMARKED_MODULES,
-  buildNoiseGrid, countWatermarkArea, generateNoiseBits, generateSqrNoisePoc, isNoiseModule, noiseBlockInfo, qrModuleInfo, validateNoisePosition,
+  buildNoiseGrid, countWatermarkArea, generateNoiseBits, generateSqrNoisePoc, isNoiseModule, noiseBitCount, noiseBlockInfo, qrModuleInfo, validateNoiseGridSize, validateNoisePosition, type NoiseGridSize,
 } from '../src/lib/sqrNoisePoc';
 
 const PREFIX = 'https://example.com/v/';
@@ -24,7 +24,7 @@ const PAIRS: Record<number, CoeffPair[]> = {
   1: [[[3, 1], [1, 3]]],
   2: [[[3, 1], [1, 3]], [[1, 0], [0, 1]]],
 };
-interface Mode { colour: WatermarkColour; gray: number; pairs: number; row: number; col: number; pixelsSha: string; refSha: string; refLen: number; maskSha: string; noiseSha: string }
+interface Mode { colour: WatermarkColour; gray: number; pairs: number; row: number; col: number; grid: number; pixelsSha: string; refSha: string; refLen: number; maskSha: string; noiseSha: string }
 interface Fixture { id: string; crc: number; modes: Mode[] }
 const FIXTURES: Fixture[] = [
  {
@@ -37,6 +37,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "1bf3a235a33721717b3236ad5f25257cdc688b04267dc37a24f7f8441370faf6",
     "refSha": "b4ffa5528a7d36929a1dba7f4764f44fa3f5900c0c259a2b2fc3d7d0f6997ad9",
     "refLen": 792,
@@ -49,6 +50,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "6531146a05d4f761cc6f1760ffb6171964b962a35703668f0b3afff077b46a35",
     "refSha": "b4ffa5528a7d36929a1dba7f4764f44fa3f5900c0c259a2b2fc3d7d0f6997ad9",
     "refLen": 792,
@@ -61,6 +63,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "71a7dd4ac4f7517921e02ea58675025c764fc9ea2ed8c9e005d3b23344ce11af",
     "refSha": "b4ffa5528a7d36929a1dba7f4764f44fa3f5900c0c259a2b2fc3d7d0f6997ad9",
     "refLen": 792,
@@ -73,6 +76,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "4c86bc26da50332ce526e5555aaf19bcd51a2d5cf25c5741558f867e72c3c2d8",
     "refSha": "d8bd7ed0240dce412b6a45db2d30af30f62dd62c309f5731acc13841c85b38f5",
     "refLen": 404,
@@ -85,6 +89,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "f255007b6790bc95ebaa47b3d19fb49fb3a5ae5c1612ecbb73f7123ca49f008f",
     "refSha": "d8bd7ed0240dce412b6a45db2d30af30f62dd62c309f5731acc13841c85b38f5",
     "refLen": 404,
@@ -97,6 +102,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "0a938e0666b8e6d1381fd0c52ef0878b697288b470a92e80c10d09080f2c3e98",
     "refSha": "d8bd7ed0240dce412b6a45db2d30af30f62dd62c309f5731acc13841c85b38f5",
     "refLen": 404,
@@ -109,6 +115,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "4069fd78c94e2735aeed6e74014b3b664f32f7dbf5c09968a51c8750a9a187ff",
     "refSha": "2c10e2e7120994c811f71253062fae7446a38db671480995976b42b9a954a046",
     "refLen": 388,
@@ -121,6 +128,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "eba6f62e63ff24eeb4c047ea804cf33fed37bfa52833e46cedd5c09eb4ee8ce2",
     "refSha": "2c10e2e7120994c811f71253062fae7446a38db671480995976b42b9a954a046",
     "refLen": 388,
@@ -133,6 +141,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "b526921490bcccaf574ba4635b2e0019993110fdf2d0f50d39be5ccb204f6d48",
     "refSha": "2c10e2e7120994c811f71253062fae7446a38db671480995976b42b9a954a046",
     "refLen": 388,
@@ -145,6 +154,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 2,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "dd8568cb38874bd87d7d55052671b6ba98a37516b6d83c6f823929bd123dc69c",
     "refSha": "b4ffa5528a7d36929a1dba7f4764f44fa3f5900c0c259a2b2fc3d7d0f6997ad9",
     "refLen": 792,
@@ -157,6 +167,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 11,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "8ab2f10cde207c4697a543c63fb2c43e4477d7c41b3fa9a5f348f8b8aa153c8a",
     "refSha": "79940e7d2648d978fb9c367d318f26a473768f5333bbc2cf0855880b6eca03bb",
     "refLen": 792,
@@ -169,6 +180,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 0,
     "col": 0,
+    "grid": 56,
     "pixelsSha": "05dc5127b473cdc1a57d209f8d0a8f020aa38afbc3e22e631d00effb47460f1c",
     "refSha": "54f0f7b19eebdcbd50aa7c95ff49d0012acaf8073a1ffebe2767782587d7752c",
     "refLen": 792,
@@ -181,6 +193,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 22,
     "col": 22,
+    "grid": 56,
     "pixelsSha": "1457204c798c8b4807380315113391a6ace58a0d7afaf1e77a9c98b3bc785dbc",
     "refSha": "75a7e3b83b3f63635f43abe2c87e1055e1ec0ce086ae3c9120916f23b2840913",
     "refLen": 792,
@@ -193,6 +206,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 7,
     "col": 9,
+    "grid": 56,
     "pixelsSha": "8aa0a953867860d5179c1333f208351f5b144b0339996f66b92246b496498cf2",
     "refSha": "cc52980231c2fa83889158e8c86b3b80d9a55a2cba4f5a966c43fe7cc6fcd2f2",
     "refLen": 792,
@@ -205,11 +219,207 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 13,
     "col": 20,
+    "grid": 56,
     "pixelsSha": "6f193ce2afb1769cb57d0cd47f94c47f1034fff1ebbc31969a48408b7fd9ebc0",
     "refSha": "3faf6df6f4537686acfddba3e4c513db065475d55313ac14414d6c00d4876449",
     "refLen": 792,
     "maskSha": "4ecd2ea5f6918295c7e30ac87f16088f5170a212b92127f8756597a5c79d4744",
     "noiseSha": "30bc7fe09f560ca412d256c41088bc693228f0b72424814034fd1d27d4d73e7d"
+   },
+   {
+    "colour": "all",
+    "gray": 0,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "b8280a48f27664014c1920034a1ea4a611eb4f4799795b8903e66d48c734269a",
+    "refSha": "b4ffa5528a7d36929a1dba7f4764f44fa3f5900c0c259a2b2fc3d7d0f6997ad9",
+    "refLen": 792,
+    "maskSha": "efea6bc4da0ddd88c598d879b540fd6c6f8c6bbf5397bc384e136c0089c49ce0",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "0f0fd59de8569dbed286147dabbd9bf0fda1601ba24a58982fda178ee0b2809a",
+    "refSha": "b4ffa5528a7d36929a1dba7f4764f44fa3f5900c0c259a2b2fc3d7d0f6997ad9",
+    "refLen": 792,
+    "maskSha": "efea6bc4da0ddd88c598d879b540fd6c6f8c6bbf5397bc384e136c0089c49ce0",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "all",
+    "gray": 255,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "71a7dd4ac4f7517921e02ea58675025c764fc9ea2ed8c9e005d3b23344ce11af",
+    "refSha": "b4ffa5528a7d36929a1dba7f4764f44fa3f5900c0c259a2b2fc3d7d0f6997ad9",
+    "refLen": 792,
+    "maskSha": "efea6bc4da0ddd88c598d879b540fd6c6f8c6bbf5397bc384e136c0089c49ce0",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "black",
+    "gray": 0,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "d1cb763e6e3ba0dcfa58a6e69553eb501249cc22cf213c2b9d01cfd2886e84a4",
+    "refSha": "d8bd7ed0240dce412b6a45db2d30af30f62dd62c309f5731acc13841c85b38f5",
+    "refLen": 404,
+    "maskSha": "97feb8f29691bb5a8aa68fab6a7e33767d37e68c80a75c24b43d0dd09cbaaf07",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "black",
+    "gray": 64,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "e5a628c014c13a9b1d4e7acc6986627f1354b8958f5be7530ffa5036c813e918",
+    "refSha": "d8bd7ed0240dce412b6a45db2d30af30f62dd62c309f5731acc13841c85b38f5",
+    "refLen": 404,
+    "maskSha": "97feb8f29691bb5a8aa68fab6a7e33767d37e68c80a75c24b43d0dd09cbaaf07",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "black",
+    "gray": 255,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "0a938e0666b8e6d1381fd0c52ef0878b697288b470a92e80c10d09080f2c3e98",
+    "refSha": "d8bd7ed0240dce412b6a45db2d30af30f62dd62c309f5731acc13841c85b38f5",
+    "refLen": 404,
+    "maskSha": "97feb8f29691bb5a8aa68fab6a7e33767d37e68c80a75c24b43d0dd09cbaaf07",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "white",
+    "gray": 0,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "9799b100130f837da0d7ce45be68d5a9840ed8f7b119f113c97fc2361f1d6ba3",
+    "refSha": "2c10e2e7120994c811f71253062fae7446a38db671480995976b42b9a954a046",
+    "refLen": 388,
+    "maskSha": "5f30ccb670bb19f98fc543e1a58bbf1821cc595cd23d5c60e8ca040d40511968",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "white",
+    "gray": 64,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "4d8737ec316bdfcbaac54631304a3c18b83079565b84b55ebb983e5b9a0dca0a",
+    "refSha": "2c10e2e7120994c811f71253062fae7446a38db671480995976b42b9a954a046",
+    "refLen": 388,
+    "maskSha": "5f30ccb670bb19f98fc543e1a58bbf1821cc595cd23d5c60e8ca040d40511968",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "white",
+    "gray": 255,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "b526921490bcccaf574ba4635b2e0019993110fdf2d0f50d39be5ccb204f6d48",
+    "refSha": "2c10e2e7120994c811f71253062fae7446a38db671480995976b42b9a954a046",
+    "refLen": 388,
+    "maskSha": "5f30ccb670bb19f98fc543e1a58bbf1821cc595cd23d5c60e8ca040d40511968",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 2,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "370b4f2b0ce1919729899ac21cfbdcd206e26c86e6d1ceb246e5e5a02211bc37",
+    "refSha": "b4ffa5528a7d36929a1dba7f4764f44fa3f5900c0c259a2b2fc3d7d0f6997ad9",
+    "refLen": 792,
+    "maskSha": "efea6bc4da0ddd88c598d879b540fd6c6f8c6bbf5397bc384e136c0089c49ce0",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 11,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "8b41c5a0034f5e3bd188366e01a69f7024464960a2e32f677ae98d5df75d1948",
+    "refSha": "79940e7d2648d978fb9c367d318f26a473768f5333bbc2cf0855880b6eca03bb",
+    "refLen": 792,
+    "maskSha": "297aa7714f53eca8ac03c25f92b6988d7fd948f2a3ec5f94c9eeb33694dbdc4c",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 0,
+    "col": 0,
+    "grid": 28,
+    "pixelsSha": "8e45c37f6285e07f528c7e6dd8990e3d324908cc0e7bdd333e270de299c6cb65",
+    "refSha": "54f0f7b19eebdcbd50aa7c95ff49d0012acaf8073a1ffebe2767782587d7752c",
+    "refLen": 792,
+    "maskSha": "22891c54759ebacc4c35e9f5baea468063df8c1cecb571ed08ea61dea19688fc",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 22,
+    "col": 22,
+    "grid": 28,
+    "pixelsSha": "92146ec28be23d720cc794d68ee62d8e15084d4df808b1a84cdd7fc9188e47db",
+    "refSha": "75a7e3b83b3f63635f43abe2c87e1055e1ec0ce086ae3c9120916f23b2840913",
+    "refLen": 792,
+    "maskSha": "52e7c26d55b8b2f70d667860202d84a7b454795f860d76e61cf4ab23ad0c3564",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 7,
+    "col": 9,
+    "grid": 28,
+    "pixelsSha": "3502b4244a255591f1df6dfe6546c177b7c5653a73557d661c0a748f5a755738",
+    "refSha": "cc52980231c2fa83889158e8c86b3b80d9a55a2cba4f5a966c43fe7cc6fcd2f2",
+    "refLen": 792,
+    "maskSha": "d3f230f09f487c95a4fa2b45e7a78e3341599d324837acba16e580eaff5c5830",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 13,
+    "col": 20,
+    "grid": 28,
+    "pixelsSha": "3853d6418f56237d0b2da50552f1aa193b4acc3fbb5c6ec1db60de9e60f319f3",
+    "refSha": "3faf6df6f4537686acfddba3e4c513db065475d55313ac14414d6c00d4876449",
+    "refLen": 792,
+    "maskSha": "4ecd2ea5f6918295c7e30ac87f16088f5170a212b92127f8756597a5c79d4744",
+    "noiseSha": "b6bddd646a4b8396974c0f90467fc2c865f5a49543e09b701a44075c55362d62"
    }
   ]
  },
@@ -223,6 +433,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "654cf6c9ddda73984f9757c8ed2bd2fbaf1a89bcc0743352401b13ebe2eb265e",
     "refSha": "dd9eac7c81235249f84030d02a790fd8474b715e8ce9d50f2f00d83bab5713a6",
     "refLen": 792,
@@ -235,6 +446,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "6339ddfaf9329a2558c49d1c3d6fd5070ffa400d57fa4a19f3beb2c9b6815477",
     "refSha": "dd9eac7c81235249f84030d02a790fd8474b715e8ce9d50f2f00d83bab5713a6",
     "refLen": 792,
@@ -247,6 +459,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "0d760423d9655c3364b728f4ed587b0c09c48df84df6d8c3a1282042e6a30685",
     "refSha": "dd9eac7c81235249f84030d02a790fd8474b715e8ce9d50f2f00d83bab5713a6",
     "refLen": 792,
@@ -259,6 +472,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "3f4ef15f769cc51dddd2252c73304a277982e6f5de46e29f71777152b6d7cb62",
     "refSha": "477b0b34c3740ab7d485c3e6d4d105214f330e7a7cbc7d98c80dcd08c675612e",
     "refLen": 421,
@@ -271,6 +485,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "a4f1285882cc031da3214cbdeaef877be91523b7cf1ff956c40444073c360906",
     "refSha": "477b0b34c3740ab7d485c3e6d4d105214f330e7a7cbc7d98c80dcd08c675612e",
     "refLen": 421,
@@ -283,6 +498,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "fc4a834c302b12a286b3b4331402a9d646cb17ca84d76b1e67719185b8228996",
     "refSha": "477b0b34c3740ab7d485c3e6d4d105214f330e7a7cbc7d98c80dcd08c675612e",
     "refLen": 421,
@@ -295,6 +511,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "b8a551b8de32426e0fe299701110f79f04705f3f061930ca19d327bcd2416d74",
     "refSha": "5fb688685d88cd9a5352401c73b3830ca39eeadcee91e5c230749e29ba014a17",
     "refLen": 371,
@@ -307,6 +524,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "c4a45f00de5ef1761f7661b147f437fbd1e78d829b7a0a31b37750dca00a35d1",
     "refSha": "5fb688685d88cd9a5352401c73b3830ca39eeadcee91e5c230749e29ba014a17",
     "refLen": 371,
@@ -319,6 +537,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "b3c6098dd5c6b2bff80051324b867b3381a9fb33b285eae658191d1d837da435",
     "refSha": "5fb688685d88cd9a5352401c73b3830ca39eeadcee91e5c230749e29ba014a17",
     "refLen": 371,
@@ -331,6 +550,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 2,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "6add1b63d49ef48600485f5f42c0d46453abb9a6fcd1776189c41fe414e45a00",
     "refSha": "dd9eac7c81235249f84030d02a790fd8474b715e8ce9d50f2f00d83bab5713a6",
     "refLen": 792,
@@ -343,6 +563,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 11,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "832d5cd3a9898e2dc2573700742c0eb2d97fe03406d01e2041660a40d63e8207",
     "refSha": "7d4d774436ffd014a4b1296f751e69c34c51a58da3cdcf35dc2bc0f4002c8f92",
     "refLen": 792,
@@ -355,6 +576,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 0,
     "col": 0,
+    "grid": 56,
     "pixelsSha": "2b577e4d95bb4d3f02926df74858b0c56bd0a2474e09fd738f6bb5d0b18b3169",
     "refSha": "9e42a635f98af2d1e5af411e5491de263f004d0e0e19d2b5e287e95febf011cc",
     "refLen": 792,
@@ -367,6 +589,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 22,
     "col": 22,
+    "grid": 56,
     "pixelsSha": "0009d0aa5ae3a5bf656a615bfc96e019aa9ebc999a6f0efda4585a5fa1ebf48e",
     "refSha": "4a8cddb913abeb52b120502a56a3e9afe7c732d2703827eeb0dd2daf204279e4",
     "refLen": 792,
@@ -379,6 +602,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 7,
     "col": 9,
+    "grid": 56,
     "pixelsSha": "04b948ec7eada64d62daa05dabf180ea1d31a5b07c9a22bcb446a15fb52685f1",
     "refSha": "436962d32e494049cabc6f7f74d0982eb0c71ec45f533eb05f799b8846e4cf23",
     "refLen": 792,
@@ -391,11 +615,207 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 13,
     "col": 20,
+    "grid": 56,
     "pixelsSha": "9d89ac53cf404c4fc912937ec4327de1979a8ba1899e00b3e2e74a1fa8e47f70",
     "refSha": "699c1badcd300c7ef30fe04f87d4372b3aa424c03832c4e22b16d058490525f6",
     "refLen": 792,
     "maskSha": "4ecd2ea5f6918295c7e30ac87f16088f5170a212b92127f8756597a5c79d4744",
     "noiseSha": "27800ca4d975f2a947820334e313c8f70a5340f68813148ffa1837b29e832760"
+   },
+   {
+    "colour": "all",
+    "gray": 0,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "54b6755791e01056e6991e96c4a9e214970a8e1abfda2af5fa04ee86d99682c1",
+    "refSha": "dd9eac7c81235249f84030d02a790fd8474b715e8ce9d50f2f00d83bab5713a6",
+    "refLen": 792,
+    "maskSha": "efea6bc4da0ddd88c598d879b540fd6c6f8c6bbf5397bc384e136c0089c49ce0",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "702c086e4157965046beb31f832742b5331ecce77482b38e852708ed580a2246",
+    "refSha": "dd9eac7c81235249f84030d02a790fd8474b715e8ce9d50f2f00d83bab5713a6",
+    "refLen": 792,
+    "maskSha": "efea6bc4da0ddd88c598d879b540fd6c6f8c6bbf5397bc384e136c0089c49ce0",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "all",
+    "gray": 255,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "0d760423d9655c3364b728f4ed587b0c09c48df84df6d8c3a1282042e6a30685",
+    "refSha": "dd9eac7c81235249f84030d02a790fd8474b715e8ce9d50f2f00d83bab5713a6",
+    "refLen": 792,
+    "maskSha": "efea6bc4da0ddd88c598d879b540fd6c6f8c6bbf5397bc384e136c0089c49ce0",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "black",
+    "gray": 0,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "5e68af38462172c58d438a4f6fc783be71c25c06d038910437baf208b8dd202f",
+    "refSha": "477b0b34c3740ab7d485c3e6d4d105214f330e7a7cbc7d98c80dcd08c675612e",
+    "refLen": 421,
+    "maskSha": "3d1af2917b122ac269464afa0d13289ccb2368c95607558d31392e5903f78c21",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "black",
+    "gray": 64,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "aca4d8bf15fcdcb9bc8a23e868fc02f4dfebf38b48723e16eb76c34eafa4237e",
+    "refSha": "477b0b34c3740ab7d485c3e6d4d105214f330e7a7cbc7d98c80dcd08c675612e",
+    "refLen": 421,
+    "maskSha": "3d1af2917b122ac269464afa0d13289ccb2368c95607558d31392e5903f78c21",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "black",
+    "gray": 255,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "fc4a834c302b12a286b3b4331402a9d646cb17ca84d76b1e67719185b8228996",
+    "refSha": "477b0b34c3740ab7d485c3e6d4d105214f330e7a7cbc7d98c80dcd08c675612e",
+    "refLen": 421,
+    "maskSha": "3d1af2917b122ac269464afa0d13289ccb2368c95607558d31392e5903f78c21",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "white",
+    "gray": 0,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "6a4c6f8467251832bb449416151798e08c5e355b3cf523fb56a2e69d6388f184",
+    "refSha": "5fb688685d88cd9a5352401c73b3830ca39eeadcee91e5c230749e29ba014a17",
+    "refLen": 371,
+    "maskSha": "d6651b1e83528ed0ad9374fb84d5daae3f632245111fcd6d2a77da49363a7d85",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "white",
+    "gray": 64,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "23eebc2347edc2a849e93fcfbf606a3e19fb9785191adcb2e770551663b7c0c9",
+    "refSha": "5fb688685d88cd9a5352401c73b3830ca39eeadcee91e5c230749e29ba014a17",
+    "refLen": 371,
+    "maskSha": "d6651b1e83528ed0ad9374fb84d5daae3f632245111fcd6d2a77da49363a7d85",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "white",
+    "gray": 255,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "b3c6098dd5c6b2bff80051324b867b3381a9fb33b285eae658191d1d837da435",
+    "refSha": "5fb688685d88cd9a5352401c73b3830ca39eeadcee91e5c230749e29ba014a17",
+    "refLen": 371,
+    "maskSha": "d6651b1e83528ed0ad9374fb84d5daae3f632245111fcd6d2a77da49363a7d85",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 2,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "b2b730abd28e190aa297a85f0832455a69201187f5cbdcab842a0eec3ee8d263",
+    "refSha": "dd9eac7c81235249f84030d02a790fd8474b715e8ce9d50f2f00d83bab5713a6",
+    "refLen": 792,
+    "maskSha": "efea6bc4da0ddd88c598d879b540fd6c6f8c6bbf5397bc384e136c0089c49ce0",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 11,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "4072db0e463e0c3a43200efbabb4fb78d39dccea55d271ee5283ce6035fde970",
+    "refSha": "7d4d774436ffd014a4b1296f751e69c34c51a58da3cdcf35dc2bc0f4002c8f92",
+    "refLen": 792,
+    "maskSha": "297aa7714f53eca8ac03c25f92b6988d7fd948f2a3ec5f94c9eeb33694dbdc4c",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 0,
+    "col": 0,
+    "grid": 28,
+    "pixelsSha": "2e90b301b8e68f98fd25cf4f39c8b17521ec8847511d9a7919f569227d806699",
+    "refSha": "9e42a635f98af2d1e5af411e5491de263f004d0e0e19d2b5e287e95febf011cc",
+    "refLen": 792,
+    "maskSha": "22891c54759ebacc4c35e9f5baea468063df8c1cecb571ed08ea61dea19688fc",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 22,
+    "col": 22,
+    "grid": 28,
+    "pixelsSha": "e7a9f43120a3f47c8fa35c0fda10fe8d9037731724fd251c0a4b47409353f0d3",
+    "refSha": "4a8cddb913abeb52b120502a56a3e9afe7c732d2703827eeb0dd2daf204279e4",
+    "refLen": 792,
+    "maskSha": "52e7c26d55b8b2f70d667860202d84a7b454795f860d76e61cf4ab23ad0c3564",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 7,
+    "col": 9,
+    "grid": 28,
+    "pixelsSha": "251dea29f55c2c7dc2e8322d7dec1cd7213c4fd0c2aa2ce20b59a43ed0269ce5",
+    "refSha": "436962d32e494049cabc6f7f74d0982eb0c71ec45f533eb05f799b8846e4cf23",
+    "refLen": 792,
+    "maskSha": "d3f230f09f487c95a4fa2b45e7a78e3341599d324837acba16e580eaff5c5830",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 13,
+    "col": 20,
+    "grid": 28,
+    "pixelsSha": "a7277bbd30cf893763965746355446e1cd56e1c02c51beb52f3b89ebd54517ff",
+    "refSha": "699c1badcd300c7ef30fe04f87d4372b3aa424c03832c4e22b16d058490525f6",
+    "refLen": 792,
+    "maskSha": "4ecd2ea5f6918295c7e30ac87f16088f5170a212b92127f8756597a5c79d4744",
+    "noiseSha": "b0a3d109568b13ca49d06c5c9af05874cd62a7433ca860e0ab0ecb78fbd38973"
    }
   ]
  },
@@ -409,6 +829,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "08716e2794c1ab01b03308f6aea58c536f4184be5cfc6f41406f29d7ce76ea2f",
     "refSha": "6af6830c4195feb2890b472334aa52ba496a8836081148e476afddb03421348e",
     "refLen": 792,
@@ -421,6 +842,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "c0c68d6641c1b360e65778daa2f76758713c48708f617071021e5e9814cd83af",
     "refSha": "6af6830c4195feb2890b472334aa52ba496a8836081148e476afddb03421348e",
     "refLen": 792,
@@ -433,6 +855,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "452d943cd2180b9802bbe95192c53ee1b05e0a9be70e968eea434ae4455f2861",
     "refSha": "6af6830c4195feb2890b472334aa52ba496a8836081148e476afddb03421348e",
     "refLen": 792,
@@ -445,6 +868,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "2a012cbb01e99bdbae84367639b6f3a81a7f5792630bc67e335ed6123209590b",
     "refSha": "c90bf8637888768135aecf3588623ea704f9149a90a5f658abf513afef2a7f37",
     "refLen": 406,
@@ -457,6 +881,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "c0b2879b1d2be9a7312b791fc427b28cf1b153eddcd4e649c93ae7709e7cdd0f",
     "refSha": "c90bf8637888768135aecf3588623ea704f9149a90a5f658abf513afef2a7f37",
     "refLen": 406,
@@ -469,6 +894,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "b6eba14c4f72b49d5b368c867bc2af54b2845cd7e35ed210976b37845cb92752",
     "refSha": "c90bf8637888768135aecf3588623ea704f9149a90a5f658abf513afef2a7f37",
     "refLen": 406,
@@ -481,6 +907,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "ff940748b6467c33ae1bb3908ca53fbbe5050ddc2f0b53c6c2a5d7da6f13d893",
     "refSha": "66f4e73306ba72bf0da3dee4457b6c944a4f2485c70d0db20395d09edd2fd57a",
     "refLen": 386,
@@ -493,6 +920,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "189154e4ca53e9b6b97b04aa9270cf286cfa6d8252b8d5e599c11ce261e25f03",
     "refSha": "66f4e73306ba72bf0da3dee4457b6c944a4f2485c70d0db20395d09edd2fd57a",
     "refLen": 386,
@@ -505,6 +933,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "4486e05cce7a0a86f409a87752233bd6a93cc6d36adef90d5fedf2b7d9926d95",
     "refSha": "66f4e73306ba72bf0da3dee4457b6c944a4f2485c70d0db20395d09edd2fd57a",
     "refLen": 386,
@@ -517,6 +946,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 2,
     "row": 9,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "607026585abcb0401b72759eeaebf0b193ab48be7245267b10e78dd6bb2e38a2",
     "refSha": "6af6830c4195feb2890b472334aa52ba496a8836081148e476afddb03421348e",
     "refLen": 792,
@@ -529,6 +959,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 11,
     "col": 11,
+    "grid": 56,
     "pixelsSha": "527a0996080247b804e6ca087736dc2bf4f57094b95f6b569e17a96a48723925",
     "refSha": "9cdd195b6232adfb85119a0795e27f0707e009bd5f06189ed054abcbe81d3a67",
     "refLen": 792,
@@ -541,6 +972,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 0,
     "col": 0,
+    "grid": 56,
     "pixelsSha": "6ec254b4271f64c73ce8f6cd6e64c2d19957e02ab6c94cb76f869b42f15e8654",
     "refSha": "5f7d71aae18f73ea71abfb2629329c110e77760020e0c634ae7b144a7f39eeee",
     "refLen": 792,
@@ -553,6 +985,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 22,
     "col": 22,
+    "grid": 56,
     "pixelsSha": "65f54a8f5a8dd687d2d31b72092b2fe80ee5e1a8ae018ea3d42dc987ce3980b4",
     "refSha": "cf8040a363d4c948b5008a6abe1b827dab0f1316bfda8d027e8103cc7da7f57f",
     "refLen": 792,
@@ -565,6 +998,7 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 7,
     "col": 9,
+    "grid": 56,
     "pixelsSha": "13b166977e940a30f8a42d9fb57c06e72c72e1c32999f9cd957fddf62dfedad6",
     "refSha": "a8e1414fb221aabe0a8efe2b867df4dc1edd82dc597a8fd8197f55eea19735a1",
     "refLen": 792,
@@ -577,11 +1011,207 @@ const FIXTURES: Fixture[] = [
     "pairs": 1,
     "row": 13,
     "col": 20,
+    "grid": 56,
     "pixelsSha": "78b909f42399c111d059400c87cb6ccd41f8bd56ad45852d18c24560ff8c09d0",
     "refSha": "aa6510c7e110cba18dfd0e16aac5f5bd86afe0353add53ab5ff0c7e84fa2fb57",
     "refLen": 792,
     "maskSha": "4ecd2ea5f6918295c7e30ac87f16088f5170a212b92127f8756597a5c79d4744",
     "noiseSha": "9c808ef3a3aaca62d144c933f5b5d1aedfcdbd677a8d00bcb726a413fbd3258b"
+   },
+   {
+    "colour": "all",
+    "gray": 0,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "e59b4964f677811a06d80fcf05bd4a78bf2ec64696e0e7fc6b2ad9f6e632937d",
+    "refSha": "6af6830c4195feb2890b472334aa52ba496a8836081148e476afddb03421348e",
+    "refLen": 792,
+    "maskSha": "efea6bc4da0ddd88c598d879b540fd6c6f8c6bbf5397bc384e136c0089c49ce0",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "0c7cb257bdf0670fcfca4f8b4f1b79c6cf009a38abae1c18546c91bf4e7d798b",
+    "refSha": "6af6830c4195feb2890b472334aa52ba496a8836081148e476afddb03421348e",
+    "refLen": 792,
+    "maskSha": "efea6bc4da0ddd88c598d879b540fd6c6f8c6bbf5397bc384e136c0089c49ce0",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "all",
+    "gray": 255,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "452d943cd2180b9802bbe95192c53ee1b05e0a9be70e968eea434ae4455f2861",
+    "refSha": "6af6830c4195feb2890b472334aa52ba496a8836081148e476afddb03421348e",
+    "refLen": 792,
+    "maskSha": "efea6bc4da0ddd88c598d879b540fd6c6f8c6bbf5397bc384e136c0089c49ce0",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "black",
+    "gray": 0,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "34ee6c78dd2af3747023014509a66320bba4093d57fb20590adcf72e95341999",
+    "refSha": "c90bf8637888768135aecf3588623ea704f9149a90a5f658abf513afef2a7f37",
+    "refLen": 406,
+    "maskSha": "f3794a8c4f2bf4017897750a86db9cf30c68689b593a616d52fdaffb02bc2638",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "black",
+    "gray": 64,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "629e75c4606b6e7fcbffcc8f8fd60ecb1c9b1b1e04d1306245f0e5bfdb08aed3",
+    "refSha": "c90bf8637888768135aecf3588623ea704f9149a90a5f658abf513afef2a7f37",
+    "refLen": 406,
+    "maskSha": "f3794a8c4f2bf4017897750a86db9cf30c68689b593a616d52fdaffb02bc2638",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "black",
+    "gray": 255,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "b6eba14c4f72b49d5b368c867bc2af54b2845cd7e35ed210976b37845cb92752",
+    "refSha": "c90bf8637888768135aecf3588623ea704f9149a90a5f658abf513afef2a7f37",
+    "refLen": 406,
+    "maskSha": "f3794a8c4f2bf4017897750a86db9cf30c68689b593a616d52fdaffb02bc2638",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "white",
+    "gray": 0,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "39864561bf8a914c5af1c74599e0deaca7129754aa65b8e3f03988215bb3229e",
+    "refSha": "66f4e73306ba72bf0da3dee4457b6c944a4f2485c70d0db20395d09edd2fd57a",
+    "refLen": 386,
+    "maskSha": "303bd7b5c07fa7f68c9b8da3d895f5a789b025e8be268d218f21882c285bb6b2",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "white",
+    "gray": 64,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "f7d1c647ed70273b2736a3f00f10a4fad769e247142caf0cd01411dab61a9f6f",
+    "refSha": "66f4e73306ba72bf0da3dee4457b6c944a4f2485c70d0db20395d09edd2fd57a",
+    "refLen": 386,
+    "maskSha": "303bd7b5c07fa7f68c9b8da3d895f5a789b025e8be268d218f21882c285bb6b2",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "white",
+    "gray": 255,
+    "pairs": 1,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "4486e05cce7a0a86f409a87752233bd6a93cc6d36adef90d5fedf2b7d9926d95",
+    "refSha": "66f4e73306ba72bf0da3dee4457b6c944a4f2485c70d0db20395d09edd2fd57a",
+    "refLen": 386,
+    "maskSha": "303bd7b5c07fa7f68c9b8da3d895f5a789b025e8be268d218f21882c285bb6b2",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 2,
+    "row": 9,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "bf51b62a04c095e97b4862dc62c570f03b968d95f1a2d74b89688d7eca17a380",
+    "refSha": "6af6830c4195feb2890b472334aa52ba496a8836081148e476afddb03421348e",
+    "refLen": 792,
+    "maskSha": "efea6bc4da0ddd88c598d879b540fd6c6f8c6bbf5397bc384e136c0089c49ce0",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 11,
+    "col": 11,
+    "grid": 28,
+    "pixelsSha": "9cc3492323f567a39ba732f06e2f00523450a20f5bc29badaa97f54ac612f6db",
+    "refSha": "9cdd195b6232adfb85119a0795e27f0707e009bd5f06189ed054abcbe81d3a67",
+    "refLen": 792,
+    "maskSha": "297aa7714f53eca8ac03c25f92b6988d7fd948f2a3ec5f94c9eeb33694dbdc4c",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 0,
+    "col": 0,
+    "grid": 28,
+    "pixelsSha": "9c0d00b780baa88fa1ec7531e905dc3242788c877170882fbdc96bf0d39c5a23",
+    "refSha": "5f7d71aae18f73ea71abfb2629329c110e77760020e0c634ae7b144a7f39eeee",
+    "refLen": 792,
+    "maskSha": "22891c54759ebacc4c35e9f5baea468063df8c1cecb571ed08ea61dea19688fc",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 22,
+    "col": 22,
+    "grid": 28,
+    "pixelsSha": "049c44d592257dcef31c7c31f9e525cc6fcab7e6d41c6c8e71f099402d973ce1",
+    "refSha": "cf8040a363d4c948b5008a6abe1b827dab0f1316bfda8d027e8103cc7da7f57f",
+    "refLen": 792,
+    "maskSha": "52e7c26d55b8b2f70d667860202d84a7b454795f860d76e61cf4ab23ad0c3564",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 7,
+    "col": 9,
+    "grid": 28,
+    "pixelsSha": "39b922f77499effbf47339f177a95d49fc18941034b9b91d9844cae40da07d7d",
+    "refSha": "a8e1414fb221aabe0a8efe2b867df4dc1edd82dc597a8fd8197f55eea19735a1",
+    "refLen": 792,
+    "maskSha": "d3f230f09f487c95a4fa2b45e7a78e3341599d324837acba16e580eaff5c5830",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
+   },
+   {
+    "colour": "all",
+    "gray": 64,
+    "pairs": 1,
+    "row": 13,
+    "col": 20,
+    "grid": 28,
+    "pixelsSha": "96c387d2c32a90b12fbe03b7d9847803fb491ffbc67bec4d6fd858a89c97cc6b",
+    "refSha": "aa6510c7e110cba18dfd0e16aac5f5bd86afe0353add53ab5ff0c7e84fa2fb57",
+    "refLen": 792,
+    "maskSha": "4ecd2ea5f6918295c7e30ac87f16088f5170a212b92127f8756597a5c79d4744",
+    "noiseSha": "de1367bb52b753896961eb45fc248becc5ee3b3b06cf87f735fc1679e99093d5"
    }
   ]
  }
@@ -667,10 +1297,10 @@ const inBlock = (y: number, x: number, row: number, col: number) =>
     const modules = buildQrModules(PREFIX + fx.id);
 
     for (const m of fx.modes) {
-      const label = `${tag} ${m.colour} gray ${m.gray} ${m.pairs} pair${m.pairs === 2 ? 's' : ''} at (${m.row},${m.col})`;
+      const label = `${tag} ${m.grid}-grid ${m.colour} gray ${m.gray} ${m.pairs} pair${m.pairs === 2 ? 's' : ''} at (${m.row},${m.col})`;
       const area = countWatermarkArea(modules, m.row, m.col);
       check(`${label}: red area has 792 modules (black + white), 49 under the noise`, area.total === 792 && area.black + area.white === 792 && area.noiseModules === 49);
-      const r = generateSqrNoisePoc({ prefix: PREFIX, fingerprintId: fx.id, strength: 120, mmSize: 10, colour: m.colour, noiseGray: m.gray, coeffPairs: PAIRS[m.pairs], noiseRow: m.row, noiseCol: m.col });
+      const r = generateSqrNoisePoc({ prefix: PREFIX, fingerprintId: fx.id, strength: 120, mmSize: 10, colour: m.colour, noiseGray: m.gray, coeffPairs: PAIRS[m.pairs], noiseRow: m.row, noiseCol: m.col, noiseGridSize: m.grid as NoiseGridSize });
 
       // identical to the Python reference
       check(`${label}: 1x pixels identical to the reference`, sha(r.pixels1x) === m.pixelsSha);
@@ -680,17 +1310,21 @@ const inBlock = (y: number, x: number, row: number, col: number) =>
       check(`${label}: result reports the position and its scan margin`, r.noiseRow === m.row && r.noiseCol === m.col && r.noiseInfo.codewordsTouched === LAYOUT_TABLE[`${m.row},${m.col}`][0]);
 
       // the 56x56 pixels at the noise position are exactly the noise grid: bit 1 = gray, bit 0 = 255, never watermarked
+      const cell = NOISE_SIZE / m.grid;
       let noiseOk = true;
+      let cellsUniform = true;
       let grayPixels = 0;
       for (let y = 0; y < NOISE_SIZE; y++)
         for (let x = 0; x < NOISE_SIZE; x++) {
           const v = r.pixels1x[(m.row * 8 + y) * CANONICAL_SIZE + (m.col * 8 + x)];
-          const one = r.noiseBitsString[y * NOISE_SIZE + x] === '1';
+          const one = r.noiseBitsString[Math.floor(y / cell) * m.grid + Math.floor(x / cell)] === '1';
           if (v !== (one ? m.gray : 255)) noiseOk = false;
           if (one && v === m.gray) grayPixels++;
+          if (v !== r.pixels1x[(m.row * 8 + Math.floor(y / cell) * cell) * CANONICAL_SIZE + (m.col * 8 + Math.floor(x / cell) * cell)]) cellsUniform = false;
         }
+      check(`${label}: ${m.grid * m.grid} noise values, each filling a ${cell}x${cell} px cell`, r.noiseBitsString.length === m.grid * m.grid && r.noiseGridSize === m.grid && r.noiseCellPx === cell && cellsUniform);
       check(`${label}: the block at the noise position is exactly the noise grid (watermark never touches it)`, noiseOk);
-      check(`${label}: the gray level is on the black pixels only (${grayPixels} of ${r.noiseBlackPixels})`, grayPixels === r.noiseBlackPixels);
+      check(`${label}: the gray level is on the black pixels only (${grayPixels} of ${r.noiseBlackPixels}; ${r.noiseBlackCells} black values x ${cell * cell})`, grayPixels === r.noiseBlackPixels && r.noiseBlackPixels === r.noiseBlackCells * cell * cell);
 
       // outside the noise block, identical to the standard SQR of the same settings
       const std = generateSqrPoc({ prefix: PREFIX, fingerprintId: fx.id, strength: 120, mmSize: 10, colour: m.colour, coeffPairs: PAIRS[m.pairs] });
@@ -734,6 +1368,31 @@ const inBlock = (y: number, x: number, row: number, col: number) =>
     return true;
   })());
   check('the noise grid itself does not depend on its position (same bits)', a.noiseBitsString === b.noiseBitsString);
+
+  // The 28 grid: same block, coarser values, nothing else changes
+  const g56 = generateSqrNoisePoc({ prefix: PREFIX, fingerprintId: sample.id, strength: 120, mmSize: 10, noiseGray: 64, noiseGridSize: 56 });
+  const g28 = generateSqrNoisePoc({ prefix: PREFIX, fingerprintId: sample.id, strength: 120, mmSize: 10, noiseGray: 64, noiseGridSize: 28 });
+  check('grid size defaults to 56 and the options are 56 and 28', DEFAULT_NOISE_GRID_SIZE === 56 && NOISE_GRID_SIZES.join(',') === '56,28' && a.noiseGridSize === 56 && a.noiseCellPx === 1);
+  check('noiseBitCount: 3136 for 56, 784 for 28', noiseBitCount(56) === 3136 && noiseBitCount(28) === 784);
+  check('28 grid: 784 values, 2 x 2 px per value', g28.noiseBitsString.length === 784 && g28.noiseGridSize === 28 && g28.noiseCellPx === 2);
+  check('28 grid: same seed and stream, from draw 0 (first 784 draws = first 784 bits of the standard string)', g28.noiseBitsString === g28.fullBinaryString.slice(0, 784));
+  check('28 grid values are the first 784 values of the 56 grid stream', g28.noiseBitsString === g56.noiseBitsString.slice(0, 784));
+  check('switching 56 -> 28 keeps the reference string, the mask, the counts and the 792 watermarked modules', g56.refBinaryString === g28.refBinaryString && g56.maskString === g28.maskString && g28.selectedCount === 792 && g56.counts.black === g28.counts.black);
+  check('switching 56 -> 28 changes only the noise block: every pixel outside it is identical', (() => {
+    for (let y = 0; y < CANONICAL_SIZE; y++) for (let x = 0; x < CANONICAL_SIZE; x++)
+      if (!inBlock(y, x, 9, 11) && g56.pixels1x[y * CANONICAL_SIZE + x] !== g28.pixels1x[y * CANONICAL_SIZE + x]) return false;
+    return true;
+  })());
+  check('the 56 and 28 noise blocks are different patterns', (() => { let d = 0; for (let y = 72; y < 128; y++) for (let x = 88; x < 144; x++) if (g56.pixels1x[y * CANONICAL_SIZE + x] !== g28.pixels1x[y * CANONICAL_SIZE + x]) d++; return d > 500; })());
+  check('buildNoiseGrid with the 28 grid: value (r,c) fills pixels 2r..2r+1 and 2c..2c+1', (() => {
+    const bits = new Uint8Array(784); bits[0] = 1; bits[28 * 3 + 5] = 1; bits[783] = 1;
+    const g = buildNoiseGrid(bits, 90, 28);
+    const px = (y: number, x: number) => g[y * 56 + x];
+    return px(0, 0) === 90 && px(0, 1) === 90 && px(1, 0) === 90 && px(1, 1) === 90 && px(0, 2) === 255 && px(2, 0) === 255
+      && px(6, 10) === 90 && px(7, 11) === 90 && px(6, 12) === 255 && px(55, 55) === 90 && px(54, 54) === 90 && px(54, 52) === 255;
+  })());
+  check('noise grid sizes other than 56 and 28 are rejected', [0, 14, 27, 55, 57, 112, Number.NaN].every((n) => throws(() => validateNoiseGridSize(n)) && throws(() => generateSqrNoisePoc({ prefix: PREFIX, fingerprintId: sample.id, strength: 120, mmSize: 10, noiseGray: 64, noiseGridSize: n as unknown as NoiseGridSize }))));
+  check('noise grid sizes 56 and 28 are accepted', !throws(() => validateNoiseGridSize(56)) && !throws(() => validateNoiseGridSize(28)));
 
   // The noise grid comes from the same seed and stream as the watermark
   const bits = generateNoiseBits(crc32(sample.id));
