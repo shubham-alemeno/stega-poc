@@ -240,7 +240,7 @@ function u32be(value: number): Uint8Array {
 
 /** Rebuilds a PNG byte array with a pHYs chunk inserted right after IHDR,
  * specifying `pixelsPerMeter` for both X and Y (unit = 1, meters). */
-function injectPhysChunk(pngBytes: Uint8Array, pixelsPerMeter: number): Uint8Array {
+export function injectPhysChunk(pngBytes: Uint8Array, pixelsPerMeter: number): Uint8Array {
   const PNG_SIGNATURE_LEN = 8;
   const ihdrLength = new DataView(pngBytes.buffer, pngBytes.byteOffset + PNG_SIGNATURE_LEN, 4).getUint32(0);
   const ihdrChunkTotalLen = 4 + 4 + ihdrLength + 4; // length + type + data + crc
@@ -270,7 +270,7 @@ function injectPhysChunk(pngBytes: Uint8Array, pixelsPerMeter: number): Uint8Arr
 
 /** mm -> pixels-per-meter, given the image's own pixel count along that
  * physical dimension. `pixelsPerMeter = pixelCount / (mm / 1000)`. */
-function mmToPixelsPerMeter(pixelCount: number, mmSize: number): number {
+export function mmToPixelsPerMeter(pixelCount: number, mmSize: number): number {
   return Math.round(pixelCount / (mmSize / 1000));
 }
 
@@ -335,7 +335,7 @@ function pngChunk(type: string, data: Uint8Array): Uint8Array {
   return chunk;
 }
 
-function buildGrayscalePng(pixels: Uint8Array, width: number, height: number): Uint8Array {
+export function buildGrayscalePng(pixels: Uint8Array, width: number, height: number): Uint8Array {
   // PNG signature
   const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 
